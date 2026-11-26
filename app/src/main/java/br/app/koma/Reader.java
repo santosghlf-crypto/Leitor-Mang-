@@ -60,6 +60,8 @@ public class Reader extends Activity {
     boolean autoRunning, chapterDetected;
     int readingProgress;
     ReadingPositions readingPositions;
+    String extractToken,extractUrl,extractKind;
+    final Runnable extractTimeout=()->{if(extractToken!=null){clearExtraction();toast("A página não respondeu. Recarregue e tente novamente.");}};
     MangaLibrary manga;
     String activeWork,pendingWork,pickWork,workQuery="",authorizedWorkUrl;
     int workFilter=0,workSort=0;
@@ -414,19 +416,20 @@ public class Reader extends Activity {
             if(w==null)return;title.setText(w.title);detail.setText(WORK_STATUS[w.status]+" • "+name(w.source));
             chapter.setText(w.chapter+" • "+w.percent+"%");progress.setProgress(w.percent);more.setContentDescription("Opções de "+w.title);updateStar(w);}
     }
-    void editWork(String id,String suggestedSource,String suggestedUrl){
+    void editWork(String id,String suggestedSource,String suggestedUrl){editWork(id,suggestedSource,suggestedUrl,"","");}
+    void editWork(String id,String suggestedSource,String suggestedUrl,String suggestedTitle,String suggestedChapter){
         pauseAuto();MangaLibrary.Work existing=manga.get(id);
         ArrayList<String> options=new ArrayList<>();ArrayList<String> labels=new ArrayList<>();
         for(int i=0;i<sites.length();i++){String site=sites.optString(i);if(checked(site)!=null){options.add(site);labels.add(name(site));}}
         if(options.isEmpty()){toast("Adicione uma fonte primeiro.");return;}
         ScrollView scroll=new ScrollView(this);LinearLayout form=col();pad(form,22,12);scroll.addView(form);
-        EditText title=new EditText(this);title.setSingleLine();title.setHint("Nome da obra");title.setFilters(new InputFilter[]{new InputFilter.LengthFilter(120)});title.setText(existing==null?"":existing.title);fill(form,text("Nome",13,MUTED));fill(form,title);space(form,12);
+        EditText title=new EditText(this);title.setSingleLine();title.setHint("Nome da obra");title.setFilters(new InputFilter[]{new InputFilter.LengthFilter(120)});title.setText(existing==null?suggestedTitle:existing.title);fill(form,text("Nome",13,MUTED));fill(form,title);space(form,12);
         Spinner sources=new Spinner(this);sources.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,labels));String chosen=existing!=null?existing.source:suggestedSource;int selected=options.indexOf(chosen);sources.setSelection(Math.max(0,selected));sources.setEnabled(existing==null);
         fill(form,text("Fonte",13,MUTED));fill(form,sources);space(form,12);
         EditText home=new EditText(this);home.setSingleLine();home.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_URI);home.setHint("Endereço da obra ou capítulo inicial");home.setText(existing!=null?existing.home:suggestedUrl==null?"":suggestedUrl);
         fill(form,text("Endereço de entrada",13,MUTED));fill(form,home);space(form,12);
-        EditText chapter=new EditText(this);chapter.setSingleLine();chapter.setHint("Ex.: Capítulo 12");chapter.setFilters(new InputFilter[]{new InputFilter.LengthFilter(80)});chapter.setText(existing!=null?existing.chapter:"");fill(form,text("Capítulo / anotação",13,MUTED));fill(form,chapter);space(form,12);
-        Spinner status=new Spinner(this);status.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,WORK_STATUS));status.setSelection(existing==null?0:existing.status);fill(form,text("Status",13,MUTED));space(form,8);
+        EditText chapter=new EditText(this);chapter.setSingleLine();chapter.setHint("Ex.: Capítulo 12");chapter.setFilters(new InputFilter[]{new InputFilter.LengthFilter(80)});chapter.setText(existing!=null?existing.chapter:suggestedChapter);fill(form,text("Capítulo / anotação",13,MUTED));fill(form,chapter);space(form,12);
+        Spinner status=new Spinner(this);status.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,WORK_STATUS));status.setSelection(existing==null?0:existing.status);fill(form,text("Status",13,MUTED));fill(form,status);space(form,8);
         fill(form,text("O endereço deve pertencer à fonte. A anotação de capítulo pode ser editada manualmente.",12,MUTED));
         AlertDialog d=new AlertDialog.Builder(this).setTitle(existing==null?"Salvar obra":"Editar obra").setView(scroll).setNegativeButton("Cancelar",null).setPositiveButton("Salvar",null).create();d.show();
         d.getButton(-1).setOnClickListener(v->{
@@ -484,11 +487,11 @@ public class Reader extends Activity {
             if(existing==null){sites.put(s);saveSites();}d.dismiss();tab=0;query="";favoritesOnly=false;library();});
     }
     void siteMenu(String s){
-        String[] opts={"Editar nome","Escolher capa","Remover capa",favorite(s)?"Remover dos favoritos":"Adicionar aos favoritos","Configurações de leitura","Abrir página inicial","Limpar cookies e sessão","Remover fonte"};
+        String[] opts={"Editar nome","Escolher capa","Remover capa",favorite(s)?"Remover dos favoritos":"Adicionar aos favoritos","Configurações de leitura","Abrir página inicial","Limpar cookies e sessão","Remover fonte","Configurar extensão"};
         new AlertDialog.Builder(this).setTitle(name(s)).setItems(opts,(d,i)->{
             switch(i){case 0:editSite(s);break;case 1:pickSite=s;Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);intent.setType("image/*");intent.addCategory(Intent.CATEGORY_OPENABLE);intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);startActivityForResult(intent,PICK_COVER);break;
                 case 2:forgetCover(s);library();break;case 3:prefs.edit().putBoolean(key("fav",s),!favorite(s)).apply();library();break;
-                case 4:siteSettings(s);break;case 5:open(s,s);break;case 6:resetSiteSession(s);break;case 7:new AlertDialog.Builder(this).setTitle("Remover "+name(s)+"?").setMessage("A fonte, suas preferências e as obras associadas serão removidas.").setNegativeButton("Cancelar",null).setPositiveButton("Remover",(a,b)->remove(s)).show();break;}
+                case 4:siteSettings(s);break;case 5:open(s,s);break;case 6:resetSiteSession(s);break;case 7:new AlertDialog.Builder(this).setTitle("Remover "+name(s)+"?").setMessage("A fonte, suas preferências e as obras associadas serão removidas.").setNegativeButton("Cancelar",null).setPositiveButton("Remover",(a,b)->remove(s)).show();break;case 8:extensionMenu(s);break;}
         }).show();
     }
     void forgetCover(String s){String u=prefs.getString(key("cover",s),"");prefs.edit().remove(key("cover",s)).apply();covers.invalidate(u);
@@ -512,7 +515,7 @@ public class Reader extends Activity {
         readingPositions.removeSource(s);
         prefs.edit().remove(key("context",s)).putString("chapterPositions",readingPositions.serialize()).apply();forgetCover(s);for(int i=0;i<sites.length();i++)if(s.equals(sites.optString(i))){sites.remove(i);break;}
         for(int i=history.length()-1;i>=0;i--){JSONObject h=history.optJSONObject(i);if(h!=null&&s.equals(h.optString("source")))history.remove(i);}
-        SharedPreferences.Editor ed=prefs.edit();for(String k:new String[]{"name","last","fav","mode","fullscreen","position","positionUrl","brightness","rotation","keepAwake","doubleTap","autoNext","scrollSpeed"})ed.remove(key(k,s));
+        SharedPreferences.Editor ed=prefs.edit();for(String k:new String[]{"name","last","fav","mode","fullscreen","position","positionUrl","brightness","rotation","keepAwake","doubleTap","autoNext","scrollSpeed","adapter"})ed.remove(key(k,s));
         ed.putString("history",history.toString()).putString("sites",sites.toString()).apply();library();}
     int scrollSpeed(String s){return ReadingPolicy.speed(prefs.getInt(key("scrollSpeed",s),100));}
     void siteSettings(String s){
@@ -573,7 +576,7 @@ public class Reader extends Activity {
         JSONObject result=new JSONObject();try{
             result.put("mode",mode(s));result.put("y",savedPosition(s,url));result.put("predecode",!covers.lowRam()&&prefs.getBoolean("predecode",true));
             result.put("doubleTap",prefs.getBoolean(key("doubleTap",s),false));result.put("autoNext",prefs.getBoolean(key("autoNext",s),false));
-            result.put("speed",scrollSpeed(s));
+            result.put("speed",scrollSpeed(s));result.put("adapter",adapterFor(s).json());
         }catch(Exception ignored){}return result;
     }
     void record(String s,String url){
@@ -613,7 +616,7 @@ public class Reader extends Activity {
         space(perf,8);fill(perf,text("Cache de capas: até "+(covers.limitBytes()/1048576)+" MiB. Imagens de capítulos continuam sob controle do Gecko.",12,MUTED));fill(shelfContent,perf);space(shelfContent,16);
         LinearLayout reading=col();pad(reading,16,16);reading.setBackground(border(PANEL,16,LINE));fill(reading,bold("Como usar",18,WHITE));space(reading,9);
         fill(reading,text("• Voltar mostra os controles durante a tela cheia.\n• Use os controles inferiores para rolagem automática e capítulos reconhecidos.\n• Ajuste brilho, rotação e gestos nas preferências da fonte.\n• O Koma guarda as últimas posições por página.",14,MUTED));fill(shelfContent,reading);space(shelfContent,22);
-        fill(shelfContent,text("KOMA 5.0  ·  GeckoView 161  ·  ARM64",12,MUTED));
+        fill(shelfContent,text("KOMA 6.0  ·  GeckoView 161  ·  ARM64",12,MUTED));
     }
     void toast(String s){Toast.makeText(this,s,Toast.LENGTH_SHORT).show();}
     void openDashboard(){
@@ -727,6 +730,7 @@ public class Reader extends Activity {
             &&Objects.equals(pageUrl,p.sender.url)&&sameSite(p.sender.url);
     }
     void clearReaderPort(){
+        clearExtraction();
         WebExtension.Port old=readerPort;readerPort=null;autoRunning=false;
         if(old!=null){try{old.disconnect();}catch(RuntimeException ignored){}}
     }
@@ -746,13 +750,19 @@ public class Reader extends Activity {
         if(readerPort!=p||!validPort(p)||!(value instanceof JSONObject))return;
         JSONObject m=(JSONObject)value;if(!Objects.equals(pageUrl,m.optString("url")))return;
         String type=m.optString("type");
+        if("extraction".equals(type)){handleExtraction(m);return;}
         if("status".equals(type)){
             chapterDetected=m.optBoolean("chapter",false);readingProgress=ReadingPolicy.percent(m.optInt("percent",0));
             nextChapter=chapterDetected?ReadingPolicy.chapterLink(source,pageUrl,m.optString("next")):null;
             previousChapter=chapterDetected?ReadingPolicy.chapterLink(source,pageUrl,m.optString("previous")):null;
             autoRunning=chapterDetected&&m.optBoolean("running",false);updateChapterControls();
             // Only update the explicitly selected work, and only known reader pages.
-            if(chapterDetected&&foreground&&Objects.equals(authorizedWorkUrl,pageUrl)&&manga.update(activeWork,source,pageUrl,readingProgress))dirtyWorks(false);
+            if(chapterDetected&&foreground&&Objects.equals(authorizedWorkUrl,pageUrl)){
+                boolean changed=manga.update(activeWork,source,pageUrl,readingProgress);
+                MangaLibrary.Work w=manga.get(activeWork);String label=MangaLibrary.clean(m.optString("chapterLabel"),80,"");
+                if(w!=null&&!label.isEmpty()&&!label.equals(w.chapter)){w.chapter=label;changed=true;}
+                if(changed)dirtyWorks(false);
+            }
         }else if("autoEnd".equals(type)&&chapterDetected&&autoRunning&&foreground&&prefs.getBoolean(key("autoNext",source),false)){
             String destination=ReadingPolicy.chapterLink(source,pageUrl,m.optString("next"));
             if(destination!=null&&destination.equals(nextChapter))navigateChapter(destination);
@@ -773,8 +783,82 @@ public class Reader extends Activity {
     }
     void readerMenu(){
         pauseAuto();if(dashboard){new AlertDialog.Builder(this).setTitle("uBlock Origin").setItems(new String[]{"Recarregar painel","Voltar aos ajustes"},(d,i)->{if(i==0)session.reload();else closeReader();}).show();return;}
-        new AlertDialog.Builder(this).setTitle(name(source)).setItems(new String[]{"Página inicial","Configurar leitura","Copiar endereço","Painel do uBlock","Limpar cookies e sessão","Voltar à estante","Salvar na biblioteca","Atualizar capítulo da obra"},(d,i)->{
-            switch(i){case 0:activeWork=null;authorizedWorkUrl=null;readerTitle.setText(name(source));session.loadUri(source);break;case 1:siteSettings(source);break;case 2:((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("Página",pageUrl));toast("Endereço copiado.");break;case 3:openDashboard();break;case 4:resetSiteSession(source);break;case 5:closeReader();break;case 6:editWork(null,source,pageUrl);break;case 7:editActiveProgress();break;}}).show();
+        new AlertDialog.Builder(this).setTitle(name(source)).setItems(new String[]{"Página inicial","Configurar leitura","Copiar endereço","Painel do uBlock","Limpar cookies e sessão","Voltar à estante","Salvar na biblioteca","Atualizar capítulo da obra","Explorar catálogo","Listar capítulos","Salvar obra detectada","Configurar extensão"},(d,i)->{
+            switch(i){case 0:activeWork=null;authorizedWorkUrl=null;readerTitle.setText(name(source));session.loadUri(source);break;case 1:siteSettings(source);break;case 2:((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("Página",pageUrl));toast("Endereço copiado.");break;case 3:openDashboard();break;case 4:resetSiteSession(source);break;case 5:closeReader();break;case 6:editWork(null,source,pageUrl);break;case 7:editActiveProgress();break;case 8:requestExtraction("catalog");break;case 9:requestExtraction("chapters");break;case 10:requestExtraction("work");break;case 11:extensionMenu(source);break;}}).show();
+    }
+    AdapterProfile adapterFor(String site){
+        try{return AdapterProfile.parse(prefs.getString(key("adapter",site),"{}"));}
+        catch(IllegalArgumentException e){return AdapterProfile.preset(0);}
+    }
+    void saveAdapter(String site,AdapterProfile profile){
+        prefs.edit().putString(key("adapter",site),profile.json().toString()).apply();
+        if(session!=null&&!dashboard&&site.equals(source)){pauseAuto();flushPosition();clearReaderPort();session.reload();}
+        else library();
+        toast("Perfil salvo nesta fonte.");
+    }
+    void extensionMenu(String site){
+        if(!has(site))return;pauseAuto();
+        AdapterProfile current=adapterFor(site);
+        new AlertDialog.Builder(this).setTitle("Extensão • "+name(site))
+          .setItems(new String[]{"Perfil atual: "+current.name(),"Escolher modelo","Editar seletores","Importar configuração JSON","Copiar configuração JSON","Restaurar padrão"},(d,i)->{
+            switch(i){case 0:new AlertDialog.Builder(this).setTitle(current.name()).setMessage("Os perfis interpretam apenas elementos da página atual. Não executam scripts importados. Para testar, abra uma página e use Explorar catálogo ou Listar capítulos.").setPositiveButton("OK",null).show();break;
+            case 1:new AlertDialog.Builder(this).setTitle("Escolher modelo").setItems(new String[]{"Genérico (padrão)","Madara (WordPress)","MangaReader (modelo comum)"},(a,b)->adapterEditor(site,AdapterProfile.preset(b))).show();break;
+            case 2:adapterEditor(site,current);break;
+            case 3:importAdapter(site);break;
+            case 4:((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("Koma extensão",current.json().toString()));toast("Configuração copiada.");break;
+            case 5:new AlertDialog.Builder(this).setTitle("Restaurar padrão?").setMessage("Somente os seletores desta fonte serão alterados.").setNegativeButton("Cancelar",null).setPositiveButton("Restaurar",(a,b)->saveAdapter(site,AdapterProfile.preset(0))).show();break;}
+          }).setNegativeButton("Fechar",null).show();
+    }
+    void adapterEditor(String site,AdapterProfile profile){
+        ScrollView scroll=new ScrollView(this);LinearLayout form=col();pad(form,20,10);scroll.addView(form);
+        fill(form,text("Seletores são nomes de elementos da página, por exemplo .reading-content ou #readerarea. Campos vazios usam o comportamento genérico quando disponível.",13,MUTED));space(form,12);
+        String[] keys=AdapterProfile.KEYS;String[] labels={"Nome do perfil","Área de imagens do leitor","Link de próximo capítulo","Link de capítulo anterior","Título da obra","Título do capítulo","Link da página da obra","Links do catálogo","Links da lista de capítulos"};
+        EditText[] fields=new EditText[keys.length];
+        for(int i=0;i<keys.length;i++){fill(form,text(labels[i],13,MUTED));EditText e=new EditText(this);e.setSingleLine();e.setTextSize(14);e.setFilters(new InputFilter[]{new InputFilter.LengthFilter(i==0?60:120)});e.setText(profile.value(keys[i]));fill(form,e);fields[i]=e;space(form,8);}
+        AlertDialog d=new AlertDialog.Builder(this).setTitle("Configurar extensão").setView(scroll).setNegativeButton("Cancelar",null).setPositiveButton("Salvar",null).create();d.show();
+        d.getButton(-1).setOnClickListener(v->{try{
+            JSONObject o=new JSONObject();o.put("version",1);for(int i=0;i<keys.length;i++)o.put(keys[i],fields[i].getText().toString());
+            AdapterProfile p=AdapterProfile.parse(o.toString());d.dismiss();saveAdapter(site,p);
+        }catch(Exception e){toast("Seletores inválidos. Use tags, classes, IDs e relações simples de descendência.");}});
+    }
+    void importAdapter(String site){
+        EditText input=new EditText(this);input.setGravity(Gravity.TOP);input.setMinLines(6);input.setMaxLines(12);input.setTextSize(13);input.setHint("Cole o JSON de configuração");input.setFilters(new InputFilter[]{new InputFilter.LengthFilter(4096)});
+        AlertDialog d=new AlertDialog.Builder(this).setTitle("Importar perfil (JSON)").setView(input).setNegativeButton("Cancelar",null).setPositiveButton("Revisar",null).create();d.show();
+        d.getButton(-1).setOnClickListener(v->{try{AdapterProfile p=AdapterProfile.parse(input.getText().toString());d.dismiss();adapterEditor(site,p);}catch(Exception e){input.setError("JSON inválido ou campos não permitidos.");}});
+    }
+    void clearExtraction(){ui.removeCallbacks(extractTimeout);extractToken=null;extractUrl=null;extractKind=null;}
+    void requestExtraction(String kind){
+        if(!validPort(readerPort)){toast("Aguarde a página carregar ou recarregue.");return;}
+        pauseAuto();clearExtraction();extractToken=UUID.randomUUID().toString();extractUrl=pageUrl;extractKind=kind;
+        try{JSONObject m=new JSONObject();m.put("request",extractToken);m.put("kind",kind);ui.postDelayed(extractTimeout,4000);sendReaderCommand("extract",m);}
+        catch(Exception e){clearExtraction();toast("Não foi possível consultar a página.");}
+    }
+    void handleExtraction(JSONObject m){
+        if(extractToken==null||!extractToken.equals(m.optString("request"))||!Objects.equals(extractUrl,pageUrl)||!Objects.equals(extractKind,m.optString("kind")))return;
+        final String kind=extractKind,site=source,current=pageUrl;final GeckoSession expected=session;clearExtraction();
+        if(!foreground||!sameSite(current))return;
+        if("work".equals(kind)){
+            String title=MangaLibrary.clean(m.optString("title"),120,"");
+            String chapter=MangaLibrary.clean(m.optString("chapterLabel"),80,"");
+            String candidate=SecurityPolicy.normalize(m.optString("workUrl"),false);
+            String url=SecurityPolicy.sameSite(site,candidate)?candidate:current;
+            editWork(null,site,url,title,chapter);return;
+        }
+        JSONArray a=m.optJSONArray("items");ArrayList<String> titles=new ArrayList<>(),urls=new ArrayList<>();HashSet<String> seen=new HashSet<>();
+        if(a!=null)for(int i=0;i<Math.min(100,a.length());i++){
+            JSONObject o=a.optJSONObject(i);if(o==null)continue;String u=SecurityPolicy.normalize(o.optString("url"),false);
+            if(!SecurityPolicy.sameSite(site,u)||!seen.add(u))continue;
+            String label=MangaLibrary.clean(o.optString("title"),120,"Abrir página");titles.add(label);urls.add(u);
+        }
+        if(urls.isEmpty()){toast("Nenhum link reconhecido. Configure os seletores da extensão.");return;}
+        new AlertDialog.Builder(this).setTitle(("catalog".equals(kind)?"Obras":"Capítulos")+" • "+urls.size())
+            .setItems(titles.toArray(new String[0]),(d,i)->{
+                if(session!=expected||!Objects.equals(pageUrl,current)||!Objects.equals(source,site))return;
+                String u=urls.get(i);
+                if("chapters".equals(kind)&&activeWork!=null&&Objects.equals(authorizedWorkUrl,current))authorizedWorkUrl=u;
+                else if("catalog".equals(kind)){activeWork=null;authorizedWorkUrl=null;readerTitle.setText(name(site));}
+                pauseAuto();flushPosition();session.loadUri(u);
+            }).setNegativeButton("Fechar",null).show();
     }
     void editActiveProgress(){
         if(!SecurityPolicy.sameSite(source,pageUrl)){toast("Página fora da fonte.");return;}

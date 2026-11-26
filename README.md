@@ -34,3 +34,7 @@ Veja [READING.md](READING.md) para os novos controles de leitura e limitações.
 
 ## Koma 5.0
 Biblioteca individual de obras: [LIBRARY.md](LIBRARY.md).
+
+
+## Koma 6.0
+Perfis de fontes: [EXTENSIONS.md](EXTENSIONS.md).

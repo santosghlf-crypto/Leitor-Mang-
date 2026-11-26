@@ -2,9 +2,10 @@
   "use strict";
   const SAVE_INTERVAL = 1500;
   const MAX_PIXELS = 3000000;
-  const CONTAINERS = ".reading-content .page-break,#readerarea,.wp-manga-chapter-img-wrap";
-  const SELECTOR = ".reading-content .page-break img:not([usemap]),#readerarea img:not([usemap]),.wp-manga-chapter-img-wrap img:not([usemap])";
+  const DEFAULT_CONTAINERS = ".reading-content .page-break,#readerarea,.wp-manga-chapter-img-wrap";
+  const DEFAULT_SELECTOR = ".reading-content .page-break img:not([usemap]),#readerarea img:not([usemap]),.wp-manga-chapter-img-wrap img:not([usemap])";
 
+  let CONTAINERS=DEFAULT_CONTAINERS,SELECTOR=DEFAULT_SELECTOR,activeAdapter={};
   function createPositionTracker({read,send,setTimer,clearTimer}) {
     let enabled=false,timer=null,lastSent=null,lastFlushed=null;
     function transmit(flush=false) {
@@ -90,6 +91,8 @@
   function chapterLink(direction){
     if(!hasChapter())return null;
     const next=direction==="next";
+    const configured=next?activeAdapter.next:activeAdapter.previous;
+    if(configured){const target=KomaAdapter.link(KomaAdapter.first(document,configured),location.href);return chapterUrl(target,location.href);}
     const selectors=next?['a[rel~="next"]','a.next-chapter','a.chapter-next','.nav-next a','.next_page']:['a[rel~="prev"]','a.prev-chapter','a.chapter-prev','.nav-previous a','.prev_page'];
     for(const selector of selectors){
       const link=document.querySelector(selector);
@@ -107,7 +110,7 @@
   }
   function publish(force=false){
     if(finished||!port||document.hidden)return;
-    const chapter=hasChapter(),state={chapter,percent:progressPercent(window.scrollY,maxScroll()),running:auto,next:chapter?chapterLink("next"):null,previous:chapter?chapterLink("previous"):null};
+    const chapter=hasChapter(),state={chapter,percent:progressPercent(window.scrollY,maxScroll()),running:auto,next:chapter?chapterLink("next"):null,previous:chapter?chapterLink("previous"):null,chapterLabel:chapter?KomaAdapter.text(document,activeAdapter.chapterLabel).slice(0,80):""};
     const signature=JSON.stringify(state);if(!force&&signature===lastStatus)return;
     lastStatus=signature;post("status",state);
   }
@@ -159,6 +162,7 @@
         if(m.type==="start")startAuto(m.speed);
         else if(m.type==="stop")stopAuto();
         else if(m.type==="status")publish(true);
+        else if(m.type==="extract"&&["work","catalog","chapters"].includes(m.kind)&&typeof m.request==="string"&&m.request.length<=64){post("extraction",{request:m.request,kind:m.kind,...KomaAdapter.extract(document,activeAdapter,m.kind,location.href)});}
         else if(m.type==="settings"){
           stopAuto();configNow.doubleTap=m.doubleTap===true;configNow.autoNext=m.autoNext===true;configNow.speed=clampSpeed(m.speed);
           document.documentElement.classList.toggle("koma-doubletap",configNow.doubleTap);taps.reset();publish(true);
@@ -235,6 +239,7 @@
   }
   function register(img){
     if(!img.isConnected||observed.has(img)||observed.size>=1200)return;
+    if(activeAdapter.reader)img.classList.add("koma-adapter-image");
     if(!img.hasAttribute("decoding"))img.setAttribute("decoding","async");
     observed.add(img);
     if(observer)observer.observe(img);
@@ -343,7 +348,9 @@
   send({type:"init",url:location.href}).then(config=>{
     if(finished)return;
     if(!config){tracker.activate();return;}
-    configNow=config;document.documentElement.classList.toggle("koma-doubletap",config.doubleTap===true);connectReader();
+    configNow=config;activeAdapter=KomaAdapter.profile(config.adapter);
+    if(activeAdapter.reader){CONTAINERS=activeAdapter.reader;SELECTOR=CONTAINERS+" img:not([usemap])";}
+    document.documentElement.classList.toggle("koma-doubletap",config.doubleTap===true);connectReader();
     const mode=config.mode;
     if(mode==="fit"||mode==="continuous"){
       document.documentElement.classList.add("koma-"+mode);startImages(config.predecode===true);

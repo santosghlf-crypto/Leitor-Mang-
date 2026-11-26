@@ -48,6 +48,8 @@ jobs:
           node --test tools/tests/reader-experience.test.cjs
           javac -d "$RUNNER_TEMP/koma-tests" app/src/main/java/br/app/koma/{SecurityPolicy,ReadingPolicy}.java tools/tests/ReadingPolicyTest.java
           java -cp "$RUNNER_TEMP/koma-tests" br.app.koma.ReadingPolicyTest
+      - name: Testar perfis de extensões
+        run: node --test tools/tests/adapter.test.cjs
       - name: Testar biblioteca e gerar APK
         run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace
       - name: Verificar conteúdo do APK
@@ -56,7 +58,7 @@ jobs:
           import zipfile
           with zipfile.ZipFile("app/build/outputs/apk/debug/app-debug.apk") as z:
               files=set(z.namelist())
-              for path in ["AndroidManifest.xml","classes.dex","assets/ublock/manifest.json","assets/paginas/manifest.json","assets/paginas/reader.js"]:
+              for path in ["AndroidManifest.xml","classes.dex","assets/ublock/manifest.json","assets/paginas/manifest.json","assets/paginas/reader.js","assets/paginas/adapter.js"]:
                   assert path in files, "Arquivo ausente: "+path
               assert any(p.startswith("lib/arm64-v8a/") for p in files), "Bibliotecas ARM64 ausentes"
               import json
