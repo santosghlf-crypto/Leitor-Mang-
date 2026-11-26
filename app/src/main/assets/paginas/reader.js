@@ -132,7 +132,7 @@
     if(y===stalledY){if(stalledAt===null)stalledAt=now;}
     else{stalledY=y;stalledAt=null;}
     if(stalledAt!==null&&now-stalledAt>=500){
-      const atEnd=y>=maxScroll()-3;
+      const end=maxScroll();const atEnd=end>0&&y>=end-3;
       autoWait=setTimeout(()=>{
         autoWait=null;if(!auto||finished||document.hidden){stopAuto();return;}
         if(window.scrollY<maxScroll()-3&&atEnd){lastFrame=0;stalledAt=null;raf=requestAnimationFrame(autoFrame);return;}

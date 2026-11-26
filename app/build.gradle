@@ -3,7 +3,10 @@ plugins {
 }
 android {
     namespace 'br.app.koma'
-    compileSdk 36
+    compileSdk {
+        version = release(37) { minorApiLevel = 2 }
+    }
+    buildToolsVersion '37.0.0'
     defaultConfig {
         applicationId 'br.app.koma'
         minSdk 26
@@ -15,7 +18,7 @@ android {
     sourceSets.main.assets.srcDir layout.buildDirectory.dir('generated/extensionAssets').get().asFile
     androidResources { ignoreAssetsPattern '!.svn:!.git:!CVS:!*~' }
 }
-dependencies { implementation 'org.mozilla.geckoview:geckoview:150.0.20260511200624' }
+dependencies { implementation 'org.mozilla.geckoview:geckoview:161.0.20261118180411' }
 def blocker = tasks.register('prepareBlocker', Exec) {
     def output = layout.buildDirectory.dir('generated/extensionAssets/ublock')
     inputs.file rootProject.file('tools/blocker.py')

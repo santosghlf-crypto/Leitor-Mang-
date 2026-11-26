@@ -1,4 +1,4 @@
-# Segurança — Koma 3.1 (GUT 2)
+# Segurança — Koma 4.0 (GUT 2)
 - uBlock Origin oficial 1.77.0 (AMO, 22/11/2026). HTTPS e host oficial em todas as requisições e redirecionamentos de build. Confere hash SHA-256 e identidade/versão, rejeita caminhos inseguros, links simbólicos e arquivos excessivos. O hash vem do catálogo AMO; isso não é verificação independente de assinatura do XPI.
 - Gecko HTTPS-only, SafeBrowsing DEFAULT, depuração remota desativada. Não há bypass de certificados na aplicação. O Android também declara bloqueio de cleartext. As listas de Safe Browsing precisam inicializar/atualizar e não detectam todos os perigos.
 - Cada fonte recebe contexto persistente aleatório no GeckoView. Cookies e armazenamento associados são particionados; não significa isolamento de processo ou VPN. A versão anterior usava contexto padrão, portanto logins podem precisar ser refeitos. Remover/limpar uma fonte solicita limpeza do contexto; limpeza é assíncrona, o novo contexto não reutiliza dados antigos. Dados legados do contexto padrão não são apagados automaticamente.
@@ -7,7 +7,7 @@
 - Câmera, microfone, localização, notificações e demais permissões solicitadas ao delegado são negadas. Algumas funções de login e mídia podem não funcionar.
 - A ponte nativa valida aplicativo, sessão, frame superior, endereço atual e fonte; apenas inicialização e posição são tratados. Não recebe instruções de execução genérica.
 - Os números locais de navegação bloqueada não são estatísticas de publicidade. Para filtros e estatísticas reais, use o painel do uBlock. Nenhum bloqueio é infalível.
-- A versão mantém GeckoView 150 e o ambiente de build previamente aprovado; atualização do motor será testada em branch separada devido à dependência do SDK 37. Não trate esta versão como motor atualizado.
+- GeckoView 161.0.20261118180411 com SDK 37.2: compilação isolada aprovada e integrada à versão 4.0. Não garante ausência de vulnerabilidades nem substitui atualizações futuras.
 - APK de teste: assinatura debug, não distribuição final. Para atualizações estáveis, crie chave de assinatura sob controle do proprietário e configure segredos protegidos. Não publique chaves no repositório.
 ## Teste no Android
 1. Adicione duas fontes e confira se o login de uma não aparece na outra. Limpe a sessão de uma e confira a outra.
