@@ -7,8 +7,9 @@ import java.util.regex.Pattern;
 final class AdapterProfile {
     static final String[] KEYS={"name","reader","next","previous","title","chapterLabel","workLink","catalog","chapters"};
     private static final Set<String> ALLOWED=new HashSet<>(Arrays.asList(KEYS));
-    private static final String ATOM="(?:[a-zA-Z][a-zA-Z0-9_-]*|[.#][a-zA-Z_][a-zA-Z0-9_-]*)";
-    private static final String PART=ATOM+"{1,5}";
+    private static final String TAG="[a-zA-Z][a-zA-Z0-9_-]*";
+    private static final String QUAL="[.#][a-zA-Z_][a-zA-Z0-9_-]*";
+    private static final String PART="(?:"+TAG+"(?:"+QUAL+"){0,4}|(?:"+QUAL+"){1,5})";
     private static final Pattern SELECTOR=Pattern.compile(PART+"(?:(?: +| *> *)"+PART+"){0,3}");
     private final JSONObject data;
     private AdapterProfile(JSONObject d){data=d;}

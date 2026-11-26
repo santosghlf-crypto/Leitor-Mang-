@@ -1,8 +1,8 @@
 /* Declarative selectors only. No fetch, script evaluation, HTML insertion or clicks. */
 (function(root){
   "use strict";
-  const ATOM="(?:[a-zA-Z][a-zA-Z0-9_-]*|[.#][a-zA-Z_][a-zA-Z0-9_-]*)";
-  const PART=ATOM+"{1,5}", SAFE=new RegExp("^"+PART+"(?:(?: +| *> *)"+PART+"){0,3}$");
+  const TAG="[a-zA-Z][a-zA-Z0-9_-]*",QUAL="[.#][a-zA-Z_][a-zA-Z0-9_-]*";
+  const PART="(?:"+TAG+"(?:"+QUAL+"){0,4}|(?:"+QUAL+"){1,5})", SAFE=new RegExp("^"+PART+"(?:(?: +| *> *)"+PART+"){0,3}$");
   const valid=s=>typeof s==="string"&&s.length<=120&&(s===""||SAFE.test(s));
   const clean=(s,n)=>typeof s==="string"?s.trim().replace(/\s+/g," ").slice(0,n):"";
   const profile=p=>{const out={};for(const k of ["reader","next","previous","title","chapterLabel","workLink","catalog","chapters"])out[k]=valid(p?.[k])?p[k]:"";return out;};
