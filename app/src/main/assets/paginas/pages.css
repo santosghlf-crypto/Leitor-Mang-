@@ -1,0 +1,8 @@
+/* Only chapter images in known readers. Leave covers, canvases and site controls alone. */
+:where(.reading-content .page-break, #readerarea, .wp-manga-chapter-img-wrap) img:not([usemap]) {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin-inline: auto;
+    image-rendering: auto;
+}

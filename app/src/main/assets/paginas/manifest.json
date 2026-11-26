@@ -1,0 +1,1 @@
+{"manifest_version":2,"name":"Koma • Páginas","version":"1.0","browser_specific_settings":{"gecko":{"id":"pages@koma.local"}},"content_scripts":[{"matches":["https://*/*"],"css":["pages.css"],"run_at":"document_start"}]}

@@ -1,0 +1,25 @@
+plugins {
+    id 'com.android.application' version '8.9.2'
+}
+android {
+    namespace 'br.app.koma'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'br.app.koma'
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName '1.0'
+        ndk { abiFilters 'arm64-v8a' }
+    }
+    sourceSets.main.assets.srcDir layout.buildDirectory.dir('generated/extensionAssets')
+    androidResources { ignoreAssetsPattern '!.svn:!.git:!CVS:!*~' }
+}
+dependencies { implementation 'org.mozilla.geckoview:geckoview:157.0.20261005135250' }
+def blocker = tasks.register('prepareBlocker', Exec) {
+    def output = layout.buildDirectory.dir('generated/extensionAssets/ublock')
+    inputs.file rootProject.file('tools/blocker.py')
+    outputs.dir output
+    commandLine 'python3', rootProject.file('tools/blocker.py'), output.get().asFile
+}
+tasks.named('preBuild').configure { dependsOn blocker }
