@@ -1,9 +1,9 @@
 plugins {
-    id 'com.android.application' version '8.9.2'
+    id 'com.android.application' version '9.2.1'
 }
 android {
     namespace 'br.app.koma'
-    compileSdk 35
+    compileSdk 37
     defaultConfig {
         applicationId 'br.app.koma'
         minSdk 26

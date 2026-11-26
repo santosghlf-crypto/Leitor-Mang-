@@ -28,10 +28,10 @@ jobs:
           set +o pipefail
           yes | "$manager" --sdk_root="$sdk" --licenses
           set -o pipefail
-          "$manager" --sdk_root="$sdk" --install "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+          "$manager" --sdk_root="$sdk" --install "platforms;android-37" "build-tools;36.0.0" "platform-tools"
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.11.1'
+          gradle-version: '9.4.1'
       - run: gradle :app:assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
         with:
