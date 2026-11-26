@@ -56,8 +56,32 @@ jobs:
           java -cp "$RUNNER_TEMP/koma-tests" br.app.koma.OfflinePolicyTest
       - name: Testar auditoria de desempenho
         run: node --test tools/tests/audit.test.cjs
+      - name: Configurar assinatura persistente opcional
+        env:
+          KEYSTORE_B64: ${{ secrets.KOMA_KEYSTORE_B64 }}
+          KOMA_STORE_PASSWORD: ${{ secrets.KOMA_STORE_PASSWORD }}
+          KOMA_KEY_ALIAS: ${{ secrets.KOMA_KEY_ALIAS }}
+          KOMA_KEY_PASSWORD: ${{ secrets.KOMA_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            if [ -z "$KOMA_STORE_PASSWORD" ] || [ -z "$KOMA_KEY_ALIAS" ] || [ -z "$KOMA_KEY_PASSWORD" ]; then
+              echo "::error::Configuração de assinatura incompleta"; exit 1
+            fi
+            umask 077
+            printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/koma-signing.p12"
+            echo "KOMA_KEYSTORE_FILE=$RUNNER_TEMP/koma-signing.p12" >> "$GITHUB_ENV"
+          else
+            echo "::warning::APK de teste com certificado temporário. Atualização de versões anteriores pode não ser possível."
+          fi
       - name: Testar biblioteca e gerar APK
+        env:
+          KOMA_STORE_PASSWORD: ${{ secrets.KOMA_STORE_PASSWORD }}
+          KOMA_KEY_ALIAS: ${{ secrets.KOMA_KEY_ALIAS }}
+          KOMA_KEY_PASSWORD: ${{ secrets.KOMA_KEY_PASSWORD }}
         run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace
+      - name: Remover chave temporária
+        if: always()
+        run: rm -f "$RUNNER_TEMP/koma-signing.p12"
       - name: Verificar conteúdo do APK
         run: |
           python3 - <<'PY'
@@ -79,6 +103,7 @@ jobs:
           "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose --print-certs "$apk"
           "$ANDROID_HOME/build-tools/37.0.0/aapt2" dump badging "$apk"
           "$ANDROID_HOME/build-tools/37.0.0/aapt2" dump permissions "$apk"
+          python3 tools/audit_apk.py "$apk"
       - uses: actions/upload-artifact@v4
         with:
           name: Koma-Android-arm64

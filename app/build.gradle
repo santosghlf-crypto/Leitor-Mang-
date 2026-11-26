@@ -15,6 +15,24 @@ android {
         versionName '7.1'
         ndk { abiFilters 'arm64-v8a' }
     }
+    // CI test APK uses debug signing but must never enable app debugging.
+    buildTypes {
+        debug {
+            debuggable false
+        }
+    }
+    // Optional persistent owner-managed key. No private signing key in this repository.
+    if (System.getenv('KOMA_KEYSTORE_FILE')) {
+        signingConfigs {
+            persistent {
+                storeFile file(System.getenv('KOMA_KEYSTORE_FILE'))
+                storePassword System.getenv('KOMA_STORE_PASSWORD')
+                keyAlias System.getenv('KOMA_KEY_ALIAS')
+                keyPassword System.getenv('KOMA_KEY_PASSWORD')
+            }
+        }
+        buildTypes.debug.signingConfig = signingConfigs.persistent
+    }
     sourceSets.main.assets.srcDir layout.buildDirectory.dir('generated/extensionAssets').get().asFile
     androidResources { ignoreAssetsPattern '!.svn:!.git:!CVS:!*~' }
 }
