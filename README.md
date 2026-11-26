@@ -38,3 +38,7 @@ Biblioteca individual de obras: [LIBRARY.md](LIBRARY.md).
 
 ## Koma 6.0
 Perfis de fontes: [EXTENSIONS.md](EXTENSIONS.md).
+
+
+## Koma 7.0
+Aparência e leitura offline: [OFFLINE.md](OFFLINE.md).

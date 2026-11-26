@@ -152,6 +152,41 @@
     stopAuto(false);if(restoring)stopRestore();tracker.activate();
     configNow.speed=clampSpeed(speed);auto=true;publish(true);raf=requestAnimationFrame(autoFrame);
   }
+  let offlineBusy=false;
+  async function saveOffline(token){
+    if(offlineBusy||!hasChapter()||!port)return;
+    offlineBusy=true;const current=location.href,connection=port;
+    const abort=new AbortController();
+    const ack=async(type,extra={})=>{
+      if(finished||document.hidden||location.href!==current||port!==connection)throw Error("cancelled");
+      if(await send({type,url:current,token,...extra})!==true)throw Error("not accepted");
+    };
+    const sameOrigin=u=>{try{const v=new URL(u,current);return v.protocol==="https:"&&v.origin===location.origin&&!v.username&&!v.password?v.href:null;}catch(e){return null;}};
+    const to64=b=>{let raw="";for(let i=0;i<b.length;i+=8192)raw+=String.fromCharCode(...b.subarray(i,i+8192));return btoa(raw);};
+    try{
+      const nodes=Array.from(document.querySelectorAll(SELECTOR));
+      if(nodes.length<1||nodes.length>120||nodes.some(img=>!img.complete||!img.naturalWidth||!img.naturalHeight||!sameOrigin(imageKey(img))))throw Error("unsupported images");
+      const urls=nodes.map(img=>sameOrigin(imageKey(img)));
+      const title=KomaAdapter.text(document,activeAdapter.title)||document.title||"Capítulo";
+      await ack("offlineBegin",{count:urls.length,title:title.slice(0,120)});
+      let chapterBytes=0;
+      for(let index=0;index<urls.length;index++){
+        // Same-origin Gecko request; never uses a separate HTTP client or bypasses CORS.
+        const response=await fetch(urls[index],{mode:"same-origin",credentials:"same-origin",redirect:"error",cache:"force-cache",signal:abort.signal});
+        if(!response.ok||!response.body||!sameOrigin(response.url)||!/^(image\/(jpeg|png|webp))(;|$)/i.test(response.headers.get("content-type")||""))throw Error("format");
+        const reader=response.body.getReader();let size=0;
+        try{
+          for(;;){const part=await reader.read();if(part.done)break;size+=part.value.byteLength;chapterBytes+=part.value.byteLength;
+            if(size>16*1048576||chapterBytes>100*1048576)throw Error("size");
+            for(let start=0;start<part.value.byteLength;start+=49152)await ack("offlineChunk",{index,data:to64(part.value.subarray(start,start+49152))});
+          }
+        }finally{try{await reader.cancel();}catch(e){}}
+        if(size===0)throw Error("empty");await ack("offlineImage",{index});
+      }
+      await ack("offlineFinish");
+    }catch(e){abort.abort();try{await send({type:"offlineAbort",url:current,token});}catch(ignored){}}
+    finally{offlineBusy=false;}
+  }
   function connectReader(){
     if(port||!configNow||finished)return;
     try{
@@ -162,6 +197,7 @@
         if(m.type==="start")startAuto(m.speed);
         else if(m.type==="stop")stopAuto();
         else if(m.type==="status")publish(true);
+        else if(m.type==="offlineStart"&&typeof m.token==="string"&&m.token.length===36)saveOffline(m.token);
         else if(m.type==="extract"&&["work","catalog","chapters"].includes(m.kind)&&typeof m.request==="string"&&m.request.length<=64){post("extraction",{request:m.request,kind:m.kind,...KomaAdapter.extract(document,activeAdapter,m.kind,location.href)});}
         else if(m.type==="settings"){
           stopAuto();configNow.doubleTap=m.doubleTap===true;configNow.autoNext=m.autoNext===true;configNow.speed=clampSpeed(m.speed);

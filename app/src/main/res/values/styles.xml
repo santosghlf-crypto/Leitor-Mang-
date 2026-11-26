@@ -10,4 +10,10 @@
  <item name="android:windowActionModeOverlay">true</item>
  <item name="android:windowSoftInputMode">adjustResize</item>
 </style>
+<style name="KomaAmoled" parent="KomaTheme">
+ <item name="android:colorAccent">#C3EFB3</item><item name="android:windowBackground">#000000</item><item name="android:statusBarColor">#000000</item><item name="android:navigationBarColor">#000000</item>
+</style>
+<style name="KomaMidnight" parent="KomaTheme">
+ <item name="android:colorAccent">#A5C8FF</item><item name="android:windowBackground">#0D1422</item><item name="android:statusBarColor">#0D1422</item><item name="android:navigationBarColor">#0D1422</item>
+</style>
 </resources>

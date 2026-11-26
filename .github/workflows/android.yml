@@ -50,6 +50,10 @@ jobs:
           java -cp "$RUNNER_TEMP/koma-tests" br.app.koma.ReadingPolicyTest
       - name: Testar perfis de extensões
         run: node --test tools/tests/adapter.test.cjs
+      - name: Testar limites offline
+        run: |
+          javac -d "$RUNNER_TEMP/koma-tests" app/src/main/java/br/app/koma/OfflinePolicy.java tools/tests/OfflinePolicyTest.java
+          java -cp "$RUNNER_TEMP/koma-tests" br.app.koma.OfflinePolicyTest
       - name: Testar biblioteca e gerar APK
         run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace
       - name: Verificar conteúdo do APK
