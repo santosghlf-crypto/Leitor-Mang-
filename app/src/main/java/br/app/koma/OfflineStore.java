@@ -32,6 +32,7 @@ final class OfflineStore {
             long bytes=0;List<Page> pages=new ArrayList<>();for(int i=0;i<a.length();i++){
                 JSONObject p=a.getJSONObject(i);File image=image(id,i);int w=p.getInt("w"),h=p.getInt("h");
                 if(!OfflinePolicy.allowedImage(w,h,p.getString("mime"))||!image.isFile()||image.length()<=0||image.length()>OfflinePolicy.MAX_IMAGE)return null;
+                if(p.has("bytes")&&p.optLong("bytes",-1)!=image.length())return null;
                 bytes+=image.length();pages.add(new Page(w,h));
             }
             if(bytes>OfflinePolicy.MAX_CHAPTER)return null;
@@ -42,7 +43,7 @@ final class OfflineStore {
     void delete(String id){erase(dir(id));}
     final class Transfer{
         final String id,source,url,title;final File part;final int expected;final JSONArray pages=new JSONArray();
-        final long existing;long bytes,imageBytes;int index;boolean done;
+        final long existing;long bytes,imageBytes;int index;boolean done;OutputStream stream;
         Transfer(String id,String source,String url,String title,int count)throws IOException{
             if(!OfflinePolicy.validId(id)||!SecurityPolicy.sameSite(source,url)||count<1||count>OfflinePolicy.MAX_PAGES)throw new IOException("Dados inválidos");
             this.id=id;this.source=source;this.url=url;this.title=MangaLibrary.clean(title,120,"Capítulo");expected=count;
@@ -53,15 +54,16 @@ final class OfflineStore {
             if(done||n!=index||index>=expected||encoded==null||encoded.length()>65536)throw new IOException("Transferência inválida");
             byte[] b;try{b=Base64.decode(encoded,Base64.NO_WRAP);}catch(Exception e){throw new IOException("Dados inválidos");}
             if(!OfflinePolicy.fits(existing,bytes,imageBytes,b.length,root.getUsableSpace()))throw new IOException("Limite de espaço ou imagem");
-            try(FileOutputStream out=new FileOutputStream(new File(part,index+".img"),true)){out.write(b);}
+            if(stream==null)stream=new BufferedOutputStream(new FileOutputStream(new File(part,index+".img")),65536);
+            stream.write(b);
             bytes+=b.length;imageBytes+=b.length;
         }
         void end(int n)throws Exception{
             if(done||n!=index||index>=expected||imageBytes<=0)throw new IOException("Imagem incompleta");
-            BitmapFactory.Options o=new BitmapFactory.Options();o.inJustDecodeBounds=true;
+            closeStream();BitmapFactory.Options o=new BitmapFactory.Options();o.inJustDecodeBounds=true;
             BitmapFactory.decodeFile(new File(part,index+".img").getPath(),o);
             if(!OfflinePolicy.allowedImage(o.outWidth,o.outHeight,o.outMimeType))throw new IOException("Formato ou tamanho não suportado");
-            pages.put(new JSONObject().put("w",o.outWidth).put("h",o.outHeight).put("mime",o.outMimeType));index++;imageBytes=0;
+            pages.put(new JSONObject().put("w",o.outWidth).put("h",o.outHeight).put("mime",o.outMimeType).put("bytes",imageBytes));index++;imageBytes=0;
         }
         void finish()throws Exception{
             if(done||index!=expected||imageBytes!=0)throw new IOException("Capítulo incompleto");
@@ -70,6 +72,7 @@ final class OfflineStore {
             if(!part.renameTo(dir(id)))throw new IOException("Falha ao concluir");
             done=true;
         }
-        void abort(){if(!done)erase(part);done=true;}
+        void closeStream()throws IOException{OutputStream out=stream;stream=null;if(out!=null)out.close();}
+        void abort(){try{closeStream();}catch(IOException ignored){}if(!done)erase(part);done=true;}
     }
 }

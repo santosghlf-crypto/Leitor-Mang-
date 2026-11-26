@@ -33,6 +33,11 @@ final class SecurityPolicy {
         URI x=parse(a,false),y=parse(b,false);
         return x!=null&&y!=null&&host(x).equals(host(y));
     }
+    static boolean sameDocument(String a,String b){
+        URI x=parse(a,false),y=parse(b,false);
+        return x!=null&&y!=null&&x.getHost().equalsIgnoreCase(y.getHost())&&
+            java.util.Objects.equals(x.getRawPath(),y.getRawPath())&&java.util.Objects.equals(x.getRawQuery(),y.getRawQuery());
+    }
     static URI extension(String raw){
         try{
             URI u=new URI(raw);

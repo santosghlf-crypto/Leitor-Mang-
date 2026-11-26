@@ -54,6 +54,8 @@ jobs:
         run: |
           javac -d "$RUNNER_TEMP/koma-tests" app/src/main/java/br/app/koma/OfflinePolicy.java tools/tests/OfflinePolicyTest.java
           java -cp "$RUNNER_TEMP/koma-tests" br.app.koma.OfflinePolicyTest
+      - name: Testar auditoria de desempenho
+        run: node --test tools/tests/audit.test.cjs
       - name: Testar biblioteca e gerar APK
         run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace
       - name: Verificar conteúdo do APK
@@ -71,6 +73,12 @@ jobs:
               assert (ubo.get("browser_specific_settings") or ubo["applications"])["gecko"]["id"]=="uBlock0@raymondhill.net"
           print("APK contém GeckoView ARM64 e as extensões.")
           PY
+      - name: Verificar assinatura e manifesto efetivo
+        run: |
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose --print-certs "$apk"
+          "$ANDROID_HOME/build-tools/37.0.0/aapt2" dump badging "$apk"
+          "$ANDROID_HOME/build-tools/37.0.0/aapt2" dump permissions "$apk"
       - uses: actions/upload-artifact@v4
         with:
           name: Koma-Android-arm64

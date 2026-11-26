@@ -69,7 +69,8 @@
         last=match?null:{x,y,t};return !!match;}
     };
   }
-  if(typeof module!=="undefined"&&module.exports)module.exports={createPositionTracker,selectCandidate,SAVE_INTERVAL,MAX_PIXELS,clampSpeed,chapterUrl,progressPercent,createTapTracker};
+  function createTimedCache(read,now,ttl){let value,expires=-1;return {get(force=false){const t=now();if(force||t>=expires){value=read();expires=t+ttl;}return value;},invalidate(){expires=-1;}};}
+  if(typeof module!=="undefined"&&module.exports)module.exports={createTimedCache,createPositionTracker,selectCandidate,SAVE_INTERVAL,MAX_PIXELS,clampSpeed,chapterUrl,progressPercent,createTapTracker};
   if(typeof window==="undefined"||window!==window.top)return;
 
   const send=(message)=>browser.runtime.sendNativeMessage("koma",message);
@@ -84,12 +85,14 @@
   let warmEnabled=false;
   let configNow=null,port=null,statusTimer=null,auto=false,raf=null,autoWait=null,lastFrame=0,carry=0,stalledAt=null,stalledY=-1;
   let lastStatus="",pointer=null;const taps=createTapTracker();
-  function hasChapter(){
-    // Only recognized reader containers that actually contain images; no guesses on catalogs.
-    return !!document.querySelector(SELECTOR);
-  }
-  function chapterLink(direction){
-    if(!hasChapter())return null;
+  let progressReady=false;
+  const metadata=createTimedCache(()=>{
+    const chapter=!!document.querySelector(SELECTOR);
+    return {chapter,next:chapter?readChapterLink("next"):null,previous:chapter?readChapterLink("previous"):null,chapterLabel:chapter?KomaAdapter.text(document,activeAdapter.chapterLabel).slice(0,80):""};
+  },()=>performance.now(),5000);
+  function hasChapter(force=false){return metadata.get(force).chapter;}
+  function chapterLink(direction,force=false){return metadata.get(force)[direction];}
+  function readChapterLink(direction){
     const next=direction==="next";
     const configured=next?activeAdapter.next:activeAdapter.previous;
     if(configured){const target=KomaAdapter.link(KomaAdapter.first(document,configured),location.href);return chapterUrl(target,location.href);}
@@ -110,7 +113,7 @@
   }
   function publish(force=false){
     if(finished||!port||document.hidden)return;
-    const chapter=hasChapter(),state={chapter,percent:progressPercent(window.scrollY,maxScroll()),running:auto,next:chapter?chapterLink("next"):null,previous:chapter?chapterLink("previous"):null,chapterLabel:chapter?KomaAdapter.text(document,activeAdapter.chapterLabel).slice(0,80):""};
+    const state={...metadata.get(force),percent:progressPercent(window.scrollY,maxScroll()),running:auto,progressReady};
     const signature=JSON.stringify(state);if(!force&&signature===lastStatus)return;
     lastStatus=signature;post("status",state);
   }
@@ -140,7 +143,7 @@
         autoWait=null;if(!auto||finished||document.hidden){stopAuto();return;}
         if(window.scrollY<maxScroll()-3&&atEnd){lastFrame=0;stalledAt=null;raf=requestAnimationFrame(autoFrame);return;}
         if(atEnd&&window.scrollY>=maxScroll()-3&&configNow.autoNext===true){
-          publish(true);const next=chapterLink("next");if(next)post("autoEnd",{next});
+          publish(true);const next=chapterLink("next",true);if(next)post("autoEnd",{next});
         }
         stopAuto();
       },2500);return;
@@ -148,24 +151,26 @@
     raf=requestAnimationFrame(autoFrame);
   }
   function startAuto(speed){
-    if(!configNow||!hasChapter()||document.hidden||finished)return;
-    stopAuto(false);if(restoring)stopRestore();tracker.activate();
+    if(!configNow||!hasChapter(true)||document.hidden||finished)return;
+    stopAuto(false);if(restoring)stopRestore();progressReady=true;tracker.activate();
     configNow.speed=clampSpeed(speed);auto=true;publish(true);raf=requestAnimationFrame(autoFrame);
   }
   let offlineBusy=false,offlineAbortController=null,offlineRequestToken=null;
   async function saveOffline(token){
-    if(offlineBusy||!hasChapter()||!port)return;
+    if(offlineBusy||!hasChapter(true)||!port)return;
     offlineBusy=true;const current=location.href,connection=port;
     const abort=new AbortController();offlineAbortController=abort;offlineRequestToken=token;
     const ack=async(type,extra={})=>{
-      if(finished||document.hidden||location.href!==current||port!==connection)throw Error("cancelled");
+      if(abort.signal.aborted||finished||document.hidden||location.href!==current||port!==connection)throw Error("cancelled");
       if(await send({type,url:current,token,...extra})!==true)throw Error("not accepted");
     };
     const sameOrigin=u=>{try{const v=new URL(u,current);return v.protocol==="https:"&&v.origin===location.origin&&!v.username&&!v.password?v.href:null;}catch(e){return null;}};
     const to64=b=>{let raw="";for(let i=0;i<b.length;i+=8192)raw+=String.fromCharCode(...b.subarray(i,i+8192));return btoa(raw);};
     try{
-      const nodes=Array.from(document.querySelectorAll(SELECTOR));
-      if(nodes.length<1||nodes.length>120||nodes.some(img=>!img.complete||!img.naturalWidth||!img.naturalHeight||!sameOrigin(imageKey(img))))throw Error("unsupported images");
+      const matches=document.querySelectorAll(SELECTOR);
+      if(matches.length<1||matches.length>120)throw Error("unsupported images");
+      const nodes=Array.from(matches);
+      if(nodes.some(img=>!img.complete||!img.naturalWidth||!img.naturalHeight||!sameOrigin(imageKey(img))))throw Error("unsupported images");
       const urls=nodes.map(img=>sameOrigin(imageKey(img)));
       const title=KomaAdapter.text(document,activeAdapter.title)||document.title||"Capítulo";
       await ack("offlineBegin",{count:urls.length,title:title.slice(0,120)});
@@ -227,9 +232,9 @@
   for(const event of ["wheel","keydown"])addEventListener(event,e=>{if(e.isTrusted&&auto)stopAuto();},{passive:true});
 
 
-  function stopRestore(){
+  function stopRestore(ready=true){
     if(restoreTimer!==null)clearTimeout(restoreTimer);
-    restoreTimer=null;restoring=false;tracker.activate();
+    restoreTimer=null;restoring=false;if(ready){progressReady=true;tracker.activate();}publish(true);
   }
   function restore(){
     restoreTimer=null;
@@ -245,10 +250,11 @@
       if(Math.abs(window.scrollY-desired)>2)window.scrollTo(0,desired);
     }
     attempts++;
-    if(Math.abs(window.scrollY-restoreTarget)<3||attempts>=25){stopRestore();return;}
-    restoreTimer=setTimeout(restore,300);
+    if(Math.abs(window.scrollY-restoreTarget)<3){stopRestore();return;}
+    if(attempts>=60){stopRestore(false);return;}
+    restoreTimer=setTimeout(restore,500);
   }
-  function markInteraction(){user=true;if(restoring)stopRestore();}
+  function markInteraction(){user=true;if(restoring)stopRestore();else if(configNow&&!progressReady){progressReady=true;tracker.activate();publish(true);}}
   for(const event of ["touchstart","wheel","pointerdown","keydown"])
     addEventListener(event,markInteraction,{passive:true,once:true});
 
@@ -289,7 +295,7 @@
     const run=deadline=>{
       idleScan=null;if(finished||document.hidden)return;
       if(needsPrune){needsPrune=false;prune();}
-      if(needsScan){needsScan=false;pendingNodes.clear();scanList=Array.from(document.querySelectorAll(SELECTOR));scanIndex=0;}
+      if(needsScan){needsScan=false;pendingNodes.clear();scanList=Array.prototype.slice.call(document.querySelectorAll(SELECTOR),0,1200);scanIndex=0;}
       let count=0;
       while(count<48&&(count===0||deadline.timeRemaining()>2)){
         if(scanIndex<scanList.length){register(scanList[scanIndex++]);count++;continue;}
@@ -300,7 +306,7 @@
         if(!node.isConnected)continue;
         if(node.matches(SELECTOR))register(node);
         // Process only added subtrees, not the entire document on every scroll.
-        scanList=Array.from(node.querySelectorAll(SELECTOR));scanIndex=0;
+        scanList=Array.prototype.slice.call(node.querySelectorAll(SELECTOR),0,1200);scanIndex=0;
       }
       if(scanIndex<scanList.length||pendingNodes.size||needsScan)scheduleScan();else scheduleStatus();
     };
@@ -308,7 +314,7 @@
     else idleScan=setTimeout(()=>run({timeRemaining:()=>5}),50);
   }
   function observeReaders(){
-    const roots=Array.from(document.querySelectorAll(CONTAINERS));
+    const roots=Array.prototype.slice.call(document.querySelectorAll(CONTAINERS),0,96);
     if(roots.length===0)return false;
     // A single observer only on reader containers and their immediate parents,
     // not the whole site for the lifetime of the document.
@@ -356,13 +362,14 @@
         }
         if(record.removedNodes.length){changed=true;needsPrune=true;}
       }
-      if(changed||needsScan)scheduleScan();
+      if(changed||needsScan){metadata.invalidate();scheduleScan();scheduleStatus();}
     });
     beginDiscovery();
     if(warmEnabled)document.addEventListener("load",event=>{
       if(observed.has(event.target))scheduleWarm();
     },true);
   }
+  addEventListener("hashchange",()=>{metadata.invalidate();publish(true);tracker.scroll();});
   addEventListener("scroll",()=>{
     lastScroll=performance.now();tracker.scroll();scheduleStatus();
     // One scheduled check; don't reset a timer or scan images for every scroll event.
@@ -385,15 +392,15 @@
   send({type:"init",url:location.href}).then(config=>{
     if(finished)return;
     if(!config){tracker.activate();return;}
-    configNow=config;activeAdapter=KomaAdapter.profile(config.adapter);
+    configNow=config;activeAdapter=KomaAdapter.profile(config.adapter);metadata.invalidate();
+    restoreTarget=Math.max(0,Math.min(10000000,Number(config.y)||0));progressReady=restoreTarget<=0||user;
     if(activeAdapter.reader){CONTAINERS=activeAdapter.reader;SELECTOR=CONTAINERS+" img:not([usemap])";}
     document.documentElement.classList.toggle("koma-doubletap",config.doubleTap===true);connectReader();
     const mode=config.mode;
     if(mode==="fit"||mode==="continuous"){
       document.documentElement.classList.add("koma-"+mode);startImages(config.predecode===true);
     }
-    restoreTarget=Math.max(0,Math.min(10000000,Number(config.y)||0));
-    if(restoreTarget<=0||user){tracker.activate();return;}
+    if(progressReady){tracker.activate();return;}
     restoring=true;restore();
   }).catch(()=>tracker.activate());
 })();

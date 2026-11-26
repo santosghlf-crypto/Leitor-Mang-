@@ -21,6 +21,11 @@ public final class SecurityPolicyTest {
         no(SecurityPolicy.extensionPage(base,"https://abc-123/dashboard.html"));
         no(SecurityPolicy.extensionPage(base,"moz-extension://abc-123@evil/dashboard.html"));
         no(SecurityPolicy.extensionPage(null,base));
+        yes(SecurityPolicy.sameDocument("https://example.org/a#x","https://example.org/a#y"));
+        no(SecurityPolicy.sameDocument("https://example.org/a","https://example.org/b"));
+        no(SecurityPolicy.sameDocument("https://example.org/a?q=1","https://example.org/a?q=2"));
+        no(SecurityPolicy.sameDocument("https://www.example.org/a","https://example.org/a"));
+        no(SecurityPolicy.sameDocument("https://example.org/a","https://evil.org/a"));
         System.out.println(checks+" verificações de URL aprovadas.");
     }
 }
