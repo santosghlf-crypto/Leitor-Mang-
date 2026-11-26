@@ -1,0 +1,16 @@
+# Segurança — Koma 3.1 (GUT 2)
+- uBlock Origin oficial 1.77.0 (AMO, 22/11/2026). HTTPS e host oficial em todas as requisições e redirecionamentos de build. Confere hash SHA-256 e identidade/versão, rejeita caminhos inseguros, links simbólicos e arquivos excessivos. O hash vem do catálogo AMO; isso não é verificação independente de assinatura do XPI.
+- Gecko HTTPS-only, SafeBrowsing DEFAULT, depuração remota desativada. Não há bypass de certificados na aplicação. O Android também declara bloqueio de cleartext. As listas de Safe Browsing precisam inicializar/atualizar e não detectam todos os perigos.
+- Cada fonte recebe contexto persistente aleatório no GeckoView. Cookies e armazenamento associados são particionados; não significa isolamento de processo ou VPN. A versão anterior usava contexto padrão, portanto logins podem precisar ser refeitos. Remover/limpar uma fonte solicita limpeza do contexto; limpeza é assíncrona, o novo contexto não reutiliza dados antigos. Dados legados do contexto padrão não são apagados automaticamente.
+- Navegação de nível superior: HTTPS, hostname válido, porta 443, sem credenciais, somente host da fonte e alias www. Domínios diferentes devem ser adicionados separadamente; redirecionamentos de login e mudança de domínio podem exigir nova fonte. CDN de imagens e recursos embutidos não são submetidos ao filtro de navegação superior. O filtro não é firewall DNS nem proteção completa contra DNS rebinding.
+- Pop-ups não iniciados pelo usuário são negados; links para nova janela do mesmo site, iniciados pelo usuário, abrem no leitor atual. Painel interno do uBlock só admite a origem real da extensão; página de bloqueio document-blocked.html é permitida na leitura. Nada abre aplicativos externos automaticamente por este delegado.
+- Câmera, microfone, localização, notificações e demais permissões solicitadas ao delegado são negadas. Algumas funções de login e mídia podem não funcionar.
+- A ponte nativa valida aplicativo, sessão, frame superior, endereço atual e fonte; apenas inicialização e posição são tratados. Não recebe instruções de execução genérica.
+- Os números locais de navegação bloqueada não são estatísticas de publicidade. Para filtros e estatísticas reais, use o painel do uBlock. Nenhum bloqueio é infalível.
+- A versão mantém GeckoView 150 e o ambiente de build previamente aprovado; atualização do motor será testada em branch separada devido à dependência do SDK 37. Não trate esta versão como motor atualizado.
+- APK de teste: assinatura debug, não distribuição final. Para atualizações estáveis, crie chave de assinatura sob controle do proprietário e configure segredos protegidos. Não publique chaves no repositório.
+## Teste no Android
+1. Adicione duas fontes e confira se o login de uma não aparece na outra. Limpe a sessão de uma e confira a outra.
+2. Teste uma página HTTPS que abre pop-up automaticamente, links de domínio diferente e um link de capítulo do mesmo host. Confira se imagens hospedadas em CDN continuam carregando.
+3. Em um ambiente de teste controlado, solicite câmera/microfone/localização; teste um site de teste Safe Browsing e certificado inválido, sem inserir credenciais.
+4. No painel do uBlock, confira versão 1.77.0, atualize listas e valide bloqueio em páginas de teste. Teste a leitura, a posição e as otimizações 3.0.

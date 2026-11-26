@@ -50,7 +50,9 @@ public class Reader extends Activity {
     String positionSource, positionUrl, lastRecordedUrl;
     int positionY;
     boolean positionDirty, positionScheduled, foreground;
-    long pageStartedAt;
+    long pageStartedAt, lastBlockedNotice;
+    int blockedNavigation;
+    boolean isolatedSession;
     final Runnable positionFlush = this::flushPosition;
 
     @Override public void onCreate(Bundle saved) {
@@ -61,6 +63,9 @@ public class Reader extends Activity {
         covers=new CoverLoader(getApplicationContext());
         if(saved!=null){pending=saved.getString("source");pickSite=saved.getString("pickSite");}
         engine=GeckoRuntime.getDefault(this);
+        engine.getSettings().setRemoteDebuggingEnabled(false);
+        engine.getSettings().setAllowInsecureConnections(GeckoRuntimeSettings.HTTPS_ONLY);
+        engine.getSettings().getContentBlocking().setSafeBrowsing(ContentBlocking.SafeBrowsing.DEFAULT);
         prepare();
     }
     JSONArray array(String key) {
@@ -108,10 +113,32 @@ public class Reader extends Activity {
     boolean has(String s){for(int i=0;i<sites.length();i++)if(s.equals(sites.optString(i)))return true;return false;}
     String last(String s){return prefs.getString(key("last",s),s);}
     String modeLabel(String s){return "original".equals(s)?"Original":"continuous".equals(s)?"Webtoon":"Ajustar largura";}
-    static String checked(String raw){
-        try{String s=raw.trim();if(s.length()>4096)return null;URI u=new URI(s.contains("://")?s:"https://"+s);
-            if(!"https".equalsIgnoreCase(u.getScheme())||u.getHost()==null||u.getUserInfo()!=null)return null;
-            return u.normalize().toASCIIString();}catch(Exception e){return null;}
+    static String checked(String raw){return SecurityPolicy.normalize(raw,true);}
+    String contextFor(String site){
+        String k=key("context",site);String current=prefs.getString(k,"");
+        if(current.isEmpty()){current="koma-"+UUID.randomUUID();prefs.edit().putString(k,current).apply();}
+        return current;
+    }
+    void resetSiteSession(String site){
+        new AlertDialog.Builder(this).setTitle("Limpar sessão desta fonte?")
+            .setMessage("Os cookies e os dados de navegação desta fonte serão separados em uma nova sessão. Você pode precisar entrar novamente. A estante e o histórico continuam salvos.")
+            .setNegativeButton("Cancelar",null).setPositiveButton("Limpar",(d,i)->{
+                if(session!=null)closeReader();
+                String old=prefs.getString(key("context",site),"");
+                prefs.edit().putString(key("context",site),"koma-"+UUID.randomUUID()).apply();
+                if(!old.isEmpty())engine.getStorageController().clearDataForSessionContext(old);
+                toast("Nova sessão criada. Limpeza do contexto anterior solicitada.");
+            }).show();
+    }
+    void noteBlocked(GeckoSession gs,String url,boolean gesture){
+        if(gs!=session)return;
+        blockedNavigation=Math.min(1000000,blockedNavigation+1);
+        long now=SystemClock.elapsedRealtime();
+        if(gesture&&now-lastBlockedNotice>1500){
+            lastBlockedNotice=now;
+            ui.post(()->{if(gs==session&&!isFinishing()){
+                setFull(false);toast("Destino não autorizado. Adicione o site como outra fonte.");}});
+        }
     }
     void saveSites(){prefs.edit().putString("sites",sites.toString()).apply();}
 
@@ -304,11 +331,11 @@ public class Reader extends Activity {
             if(existing==null){sites.put(s);saveSites();}d.dismiss();tab=0;query="";favoritesOnly=false;library();});
     }
     void siteMenu(String s){
-        String[] opts={"Editar nome","Escolher capa","Remover capa",favorite(s)?"Remover dos favoritos":"Adicionar aos favoritos","Configurações de leitura","Abrir página inicial","Remover fonte"};
+        String[] opts={"Editar nome","Escolher capa","Remover capa",favorite(s)?"Remover dos favoritos":"Adicionar aos favoritos","Configurações de leitura","Abrir página inicial","Limpar cookies e sessão","Remover fonte"};
         new AlertDialog.Builder(this).setTitle(name(s)).setItems(opts,(d,i)->{
             switch(i){case 0:editSite(s);break;case 1:pickSite=s;Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);intent.setType("image/*");intent.addCategory(Intent.CATEGORY_OPENABLE);intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);startActivityForResult(intent,PICK_COVER);break;
                 case 2:forgetCover(s);library();break;case 3:prefs.edit().putBoolean(key("fav",s),!favorite(s)).apply();library();break;
-                case 4:siteSettings(s);break;case 5:open(s,s);break;case 6:new AlertDialog.Builder(this).setTitle("Remover "+name(s)+"?").setMessage("A fonte e suas preferências serão removidas.").setNegativeButton("Cancelar",null).setPositiveButton("Remover",(a,b)->remove(s)).show();break;}
+                case 4:siteSettings(s);break;case 5:open(s,s);break;case 6:resetSiteSession(s);break;case 7:new AlertDialog.Builder(this).setTitle("Remover "+name(s)+"?").setMessage("A fonte e suas preferências serão removidas.").setNegativeButton("Cancelar",null).setPositiveButton("Remover",(a,b)->remove(s)).show();break;}
         }).show();
     }
     void forgetCover(String s){String u=prefs.getString(key("cover",s),"");prefs.edit().remove(key("cover",s)).apply();covers.invalidate(u);
@@ -320,7 +347,10 @@ public class Reader extends Activity {
             if(!u.toString().equals(prefs.getString(key("cover",s),"")))forgetCover(s);
             prefs.edit().putString(key("cover",s),u.toString()).apply();covers.invalidate(u.toString());library();}
         catch(Exception e){toast("Não foi possível salvar essa capa.");}}
-    void remove(String s){forgetCover(s);for(int i=0;i<sites.length();i++)if(s.equals(sites.optString(i))){sites.remove(i);break;}
+    void remove(String s){
+        String old=prefs.getString(key("context",s),"");
+        if(!old.isEmpty())engine.getStorageController().clearDataForSessionContext(old);
+        prefs.edit().remove(key("context",s)).apply();forgetCover(s);for(int i=0;i<sites.length();i++)if(s.equals(sites.optString(i))){sites.remove(i);break;}
         for(int i=history.length()-1;i>=0;i--){JSONObject h=history.optJSONObject(i);if(h!=null&&s.equals(h.optString("source")))history.remove(i);}
         SharedPreferences.Editor ed=prefs.edit();for(String k:new String[]{"name","last","fav","mode","fullscreen","position","positionUrl"})ed.remove(key(k,s));
         ed.putString("history",history.toString()).putString("sites",sites.toString()).apply();library();}
@@ -356,9 +386,14 @@ public class Reader extends Activity {
         heading(shelfContent,"Ajustes","Controle sua experiência de leitura.");
         LinearLayout panel=col();pad(panel,16,16);panel.setBackground(border(PANEL,16,LINE));
         fill(panel,bold("Proteção de navegação",18,WHITE));space(panel,7);fill(panel,text(ready?"● uBlock Origin habilitado":failed?"Falha ao carregar extensão":"Iniciando extensão",14,ready?MINT:WARN));space(panel,8);
-        fill(panel,text("O painel oficial permite ajustar filtros e consultar os números do bloqueador. O status acima indica que a extensão foi habilitada.",13,MUTED));space(panel,14);
+        fill(panel,text("O painel oficial permite ajustar filtros e consultar os números do bloqueador. Extensão habilitada não garante que todos os anúncios serão bloqueados.",13,MUTED));space(panel,14);
         fill(panel,button("Abrir painel do uBlock",true,this::openDashboard));if(failed){space(panel,8);fill(panel,button("Tentar novamente",false,this::prepare));}
         fill(shelfContent,panel);space(shelfContent,16);
+        LinearLayout privacy=col();pad(privacy,16,16);privacy.setBackground(border(PANEL,16,LINE));
+        fill(privacy,bold("Privacidade e segurança",18,WHITE));space(privacy,9);
+        fill(privacy,text("● HTTPS obrigatório e proteção contra sites perigosos\n● Cookies separados por fonte\n● Câmera, microfone e localização negados\n● Pop-ups automáticos e navegação para outros domínios bloqueados\n● Depuração remota desativada",14,MUTED));space(privacy,12);
+        fill(privacy,text("Bloqueios de navegação nesta execução: "+blockedNavigation+" (não são contagem de anúncios do uBlock).",12,MUTED));
+        space(privacy,8);fill(privacy,text("Para abrir outro domínio, adicione uma nova fonte. Para apagar a sessão de um site, use as opções da fonte.",13,MUTED));fill(shelfContent,privacy);space(shelfContent,16);
         LinearLayout perf=col();pad(perf,16,16);perf.setBackground(border(PANEL,16,LINE));
         fill(perf,bold("Desempenho",18,WHITE));space(perf,8);
         Switch warm=new Switch(this);warm.setText("Preparar próxima imagem");warm.setChecked(!covers.lowRam()&&prefs.getBoolean("predecode",true));warm.setEnabled(!covers.lowRam());
@@ -367,19 +402,21 @@ public class Reader extends Activity {
         space(perf,8);fill(perf,text("Cache de capas: até "+(covers.limitBytes()/1048576)+" MiB. Imagens de capítulos continuam sob controle do Gecko.",12,MUTED));fill(shelfContent,perf);space(shelfContent,16);
         LinearLayout reading=col();pad(reading,16,16);reading.setBackground(border(PANEL,16,LINE));fill(reading,bold("Como usar",18,WHITE));space(reading,9);
         fill(reading,text("• Voltar mostra os controles durante a tela cheia.\n• Ajuste o modo e a capa em cada fonte.\n• O Koma salva a página e tenta recuperar a posição em leitores compatíveis.",14,MUTED));fill(shelfContent,reading);space(shelfContent,22);
-        fill(shelfContent,text("KOMA 3.0  ·  GeckoView 150  ·  ARM64",12,MUTED));
+        fill(shelfContent,text("KOMA 3.1  ·  GeckoView 150  ·  ARM64",12,MUTED));
     }
     void toast(String s){Toast.makeText(this,s,Toast.LENGTH_SHORT).show();}
     void openDashboard(){
         if(!ready||blocker==null){toast("O bloqueador ainda não está pronto.");return;}
+        String base=blocker.metaData.baseUrl;
         String u=blocker.metaData.optionsPageUrl;
-        if(u==null||!u.startsWith("moz-extension://")){String base=blocker.metaData.baseUrl;if(base!=null&&base.startsWith("moz-extension://"))u=base+(base.endsWith("/")?"":"/")+"dashboard.html";}
-        if(u==null||!u.startsWith("moz-extension://")){toast("O painel não está disponível nesta sessão.");return;}
+        if(!SecurityPolicy.extensionPage(base,u))u=base==null?null:base+(base.endsWith("/")?"":"/")+"dashboard.html";
+        if(!SecurityPolicy.extensionPage(base,u)){toast("O painel não está disponível nesta sessão.");return;}
         if(session!=null)closeReader();tab=2;startReader(null,u,true);
     }
     void open(String s,String explicit){
         if(!ready){toast("O leitor ainda está iniciando.");return;}if(session!=null||!has(s))return;
-        String u=explicit==null?last(s):explicit;String valid=checked(u);if(valid==null)valid=s;startReader(s,valid,false);
+        String u=explicit==null?last(s):explicit;String valid=checked(u);if(!SecurityPolicy.sameSite(s,valid))valid=checked(s);
+        if(valid==null){toast("Endereço antigo não atende à política HTTPS. Adicione uma fonte válida.");return;}startReader(s,valid,false);
     }
     void startReader(String s,String url,boolean isDashboard){
         flushPosition();positionSource=null;positionUrl=null;lastRecordedUrl=null;pageStartedAt=0;
@@ -392,8 +429,17 @@ public class Reader extends Activity {
         if(!isDashboard){LinearLayout controls=row();pad(controls,10,5);String[] names={"Voltar","Recarregar","Tela cheia"};Runnable[] actions={()->{if(session!=null&&canBack)session.goBack();},()->{if(session!=null)session.reload();},()->setFull(true)};
             for(int i=0;i<3;i++){LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,dp(42),1);if(i>0)p.leftMargin=dp(6);controls.addView(button(names[i],i==2,actions[i]),p);}fill(bar,controls);}
         progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);progress.setMax(100);progress.setProgressTintList(ColorStateList.valueOf(MINT));bar.addView(progress,new LinearLayout.LayoutParams(-1,dp(2)));fill(root,bar);
-        browser=new GeckoView(this);browser.setBackgroundColor(Color.BLACK);root.addView(browser,new LinearLayout.LayoutParams(-1,0,1));session=new GeckoSession();
-        final String trustedDashboard=isDashboard?url.substring(0,url.indexOf("/", "moz-extension://".length())+1):"";
+        browser=new GeckoView(this);browser.setBackgroundColor(Color.BLACK);root.addView(browser,new LinearLayout.LayoutParams(-1,0,1));
+        GeckoSessionSettings settings=new GeckoSessionSettings.Builder().contextId(isDashboard?"koma-ublock-panel":contextFor(s)).build();
+        session=new GeckoSession(settings);
+        session.setPermissionDelegate(new GeckoSession.PermissionDelegate(){
+            @Override public void onAndroidPermissionsRequest(GeckoSession gs,String[] permissions,Callback cb){cb.reject();}
+            @Override public void onMediaPermissionRequest(GeckoSession gs,String uri,MediaSource[] video,MediaSource[] audio,MediaCallback cb){cb.reject();}
+            @Override public GeckoResult<Integer> onContentPermissionRequest(GeckoSession gs,ContentPermission permission){
+                return GeckoResult.fromValue(ContentPermission.VALUE_DENY);
+            }
+        });
+        final String blockerBase=blocker==null?null:blocker.metaData.baseUrl;
         session.setNavigationDelegate(new GeckoSession.NavigationDelegate(){
             @Override public void onCanGoBack(GeckoSession gs,boolean b){if(gs==session)canBack=b;}
             @Override public void onLocationChange(GeckoSession gs,String loc,List<GeckoSession.PermissionDelegate.ContentPermission> permissions,Boolean gesture){
@@ -401,9 +447,17 @@ public class Reader extends Activity {
                 if(!loc.equals(pageUrl)){flushPosition();positionSource=null;positionUrl=null;}
                 pageUrl=loc;if(!dashboard){String domain=host(loc);if(!TextUtils.equals(readerHost.getText(),domain))readerHost.setText(domain);if(sameSite(loc)){record(source,loc);}}}
             @Override public GeckoResult<AllowOrDeny> onLoadRequest(GeckoSession gs,LoadRequest r){
-                if(r.uri==null)return GeckoResult.deny();boolean trusted=isDashboard&&!trustedDashboard.isEmpty()&&r.uri.startsWith(trustedDashboard);
-                if(!trusted&&!r.uri.startsWith("https://"))return GeckoResult.deny();
-                if(r.target==TARGET_WINDOW_NEW){if(r.hasUserGesture&&gs==session&&!isDashboard)gs.loadUri(r.uri);return GeckoResult.deny();}return GeckoResult.allow();}
+                if(gs!=session||r.uri==null)return GeckoResult.deny();
+                boolean trusted=isDashboard?SecurityPolicy.extensionPage(blockerBase,r.uri):SecurityPolicy.blockerWarning(blockerBase,r.uri);
+                boolean allowed=trusted||(!isDashboard&&SecurityPolicy.sameSite(s,r.uri));
+                if(!allowed){noteBlocked(gs,r.uri,r.hasUserGesture);return GeckoResult.deny();}
+                if(r.target==TARGET_WINDOW_NEW){
+                    if(r.hasUserGesture&&!isDashboard&&SecurityPolicy.sameSite(s,r.uri)){
+                        final String destination=r.uri;ui.post(()->{if(gs==session)gs.loadUri(destination);});
+                    }else noteBlocked(gs,r.uri,r.hasUserGesture);
+                    return GeckoResult.deny();
+                }
+                return GeckoResult.allow();}
         });
         session.setProgressDelegate(new GeckoSession.ProgressDelegate(){
             @Override public void onPageStart(GeckoSession gs,String url){if(gs==session){pageStartedAt=SystemClock.elapsedRealtime();if(!full){progress.setProgress(0);progress.setVisibility(View.VISIBLE);}}}
@@ -416,8 +470,9 @@ public class Reader extends Activity {
         });
         if(!isDashboard&&pages!=null)session.getWebExtensionController().setMessageDelegate(pages,new WebExtension.MessageDelegate(){
             @Override public GeckoResult<Object> onMessage(String app,Object message,WebExtension.MessageSender sender){
-                if(sender.session!=session||dashboard||source==null||!(message instanceof JSONObject))return null;
-                JSONObject m=(JSONObject)message;String u=m.optString("url");if(!sameSite(u)||!u.equals(sender.url))return null;
+                if(!"koma".equals(app)||sender.session!=session||!sender.isTopLevel()||dashboard||source==null||!(message instanceof JSONObject))return null;
+                JSONObject m=(JSONObject)message;String u=m.optString("url");
+                if(!sameSite(u)||!u.equals(sender.url)||!u.equals(pageUrl)||u.length()>4096)return null;
                 if("init".equals(m.optString("type"))){JSONObject result=new JSONObject();try{
                     result.put("mode",mode(source));result.put("y",savedPosition(source,u));
                     result.put("predecode",!covers.lowRam()&&prefs.getBoolean("predecode",true));}catch(Exception ignored){}return GeckoResult.fromValue((Object)result);}
@@ -427,11 +482,11 @@ public class Reader extends Activity {
         session.open(engine);browser.setSession(session);setFull(full);session.loadUri(url);
         if(!isDashboard&&!prefs.getBoolean("hint2",false)){toast("Use Voltar para mostrar os controles.");prefs.edit().putBoolean("hint2",true).apply();}
     }
-    boolean sameSite(String u){String a=source==null?null:host(source),b=host(u);return checked(u)!=null&&a!=null&&b!=null&&a.replaceFirst("^www\\.","").equalsIgnoreCase(b.replaceFirst("^www\\.",""));}
+    boolean sameSite(String u){return SecurityPolicy.sameSite(source,u);}
     void readerMenu(){
         if(dashboard){new AlertDialog.Builder(this).setTitle("uBlock Origin").setItems(new String[]{"Recarregar painel","Voltar aos ajustes"},(d,i)->{if(i==0)session.reload();else closeReader();}).show();return;}
-        new AlertDialog.Builder(this).setTitle(name(source)).setItems(new String[]{"Página inicial","Configurar leitura","Copiar endereço","Painel do uBlock","Voltar à estante"},(d,i)->{
-            switch(i){case 0:session.loadUri(source);break;case 1:siteSettings(source);break;case 2:((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("Página",pageUrl));toast("Endereço copiado.");break;case 3:openDashboard();break;case 4:closeReader();break;}}).show();
+        new AlertDialog.Builder(this).setTitle(name(source)).setItems(new String[]{"Página inicial","Configurar leitura","Copiar endereço","Painel do uBlock","Limpar cookies e sessão","Voltar à estante"},(d,i)->{
+            switch(i){case 0:session.loadUri(source);break;case 1:siteSettings(source);break;case 2:((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("Página",pageUrl));toast("Endereço copiado.");break;case 3:openDashboard();break;case 4:resetSiteSession(source);break;case 5:closeReader();break;}}).show();
     }
     int savedPosition(String s,String url){
         if(Objects.equals(s,positionSource)&&Objects.equals(url,positionUrl))return positionY;

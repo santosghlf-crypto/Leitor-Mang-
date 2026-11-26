@@ -38,6 +38,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/koma-tests"
           javac -d "$RUNNER_TEMP/koma-tests" app/src/main/java/br/app/koma/PerfPolicy.java tools/tests/PerfPolicyTest.java
           java -cp "$RUNNER_TEMP/koma-tests" br.app.koma.PerfPolicyTest
+      - name: Testar segurança
+        run: |
+          python3 -m unittest discover -s tools/tests -p 'test_blocker.py' -v
+          javac -d "$RUNNER_TEMP/koma-tests" app/src/main/java/br/app/koma/SecurityPolicy.java tools/tests/SecurityPolicyTest.java
+          java -cp "$RUNNER_TEMP/koma-tests" br.app.koma.SecurityPolicyTest
       - run: gradle :app:assembleDebug --stacktrace
       - name: Verificar conteúdo do APK
         run: |
@@ -48,6 +53,10 @@ jobs:
               for path in ["AndroidManifest.xml","classes.dex","assets/ublock/manifest.json","assets/paginas/manifest.json","assets/paginas/reader.js"]:
                   assert path in files, "Arquivo ausente: "+path
               assert any(p.startswith("lib/arm64-v8a/") for p in files), "Bibliotecas ARM64 ausentes"
+              import json
+              ubo=json.loads(z.read("assets/ublock/manifest.json"))
+              assert ubo["version"]=="1.77.0", "Versão do uBlock incorreta"
+              assert (ubo.get("browser_specific_settings") or ubo["applications"])["gecko"]["id"]=="uBlock0@raymondhill.net"
           print("APK contém GeckoView ARM64 e as extensões.")
           PY
       - uses: actions/upload-artifact@v4
