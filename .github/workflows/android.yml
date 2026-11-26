@@ -48,7 +48,8 @@ jobs:
           node --test tools/tests/reader-experience.test.cjs
           javac -d "$RUNNER_TEMP/koma-tests" app/src/main/java/br/app/koma/{SecurityPolicy,ReadingPolicy}.java tools/tests/ReadingPolicyTest.java
           java -cp "$RUNNER_TEMP/koma-tests" br.app.koma.ReadingPolicyTest
-      - run: gradle :app:assembleDebug --stacktrace
+      - name: Testar biblioteca e gerar APK
+        run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace
       - name: Verificar conteúdo do APK
         run: |
           python3 - <<'PY'
