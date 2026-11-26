@@ -28,8 +28,14 @@ def verify(data, digest):
             raise ValueError("Extensão ou versão inesperada")
 
 def main(output):
-    metadata = json.loads(download(
-        f"https://addons.mozilla.org/api/v5/addons/addon/ublock-origin/versions/{VERSION}/"))
+    url = "https://addons.mozilla.org/api/v5/addons/addon/ublock-origin/versions/?page_size=50"
+    metadata = None
+    while url and metadata is None:
+        page = json.loads(download(url))
+        metadata = next((v for v in page["results"] if v["version"] == VERSION), None)
+        url = page.get("next")
+    if metadata is None:
+        raise ValueError("Versão oficial do uBlock não encontrada")
     package = metadata["file"]
     data = download(package["url"])
     verify(data, package["hash"])

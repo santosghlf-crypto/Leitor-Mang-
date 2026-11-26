@@ -28,7 +28,7 @@ jobs:
           set +o pipefail
           yes | "$manager" --sdk_root="$sdk" --licenses
           set -o pipefail
-          "$manager" --sdk_root="$sdk" --install "platforms;android-37" "build-tools;36.0.0" "platform-tools"
+          "$manager" --sdk_root="$sdk" --install "platforms;android-36" "build-tools;36.0.0" "platform-tools"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.4.1'
