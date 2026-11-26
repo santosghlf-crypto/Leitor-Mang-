@@ -1,0 +1,13 @@
+<resources>
+<style name="KomaTheme" parent="android:style/Theme.Material.NoActionBar">
+ <item name="android:fontFamily">sans</item>
+ <item name="android:colorAccent">#A8EDC1</item>
+ <item name="android:windowBackground">#101316</item>
+ <item name="android:statusBarColor">#101316</item>
+ <item name="android:navigationBarColor">#101316</item>
+ <item name="android:windowLightStatusBar">false</item>
+ <item name="android:windowLightNavigationBar">false</item>
+ <item name="android:windowActionModeOverlay">true</item>
+ <item name="android:windowSoftInputMode">adjustResize</item>
+</style>
+</resources>

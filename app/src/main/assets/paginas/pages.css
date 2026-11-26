@@ -1,8 +1,12 @@
-/* Only chapter images in known readers. Leave covers, canvases and site controls alone. */
-:where(.reading-content .page-break, #readerarea, .wp-manga-chapter-img-wrap) img:not([usemap]) {
-    display: block;
-    max-width: 100%;
-    height: auto;
-    margin-inline: auto;
-    image-rendering: auto;
+/* Do not modify images or controls on the rest of a website. */
+:root.koma-fit :where(.reading-content .page-break,#readerarea,.wp-manga-chapter-img-wrap) img:not([usemap]),
+:root.koma-continuous :where(.reading-content .page-break,#readerarea,.wp-manga-chapter-img-wrap) img:not([usemap]) {
+  display:block !important; max-width:100% !important; height:auto !important;
+  margin-inline:auto !important; image-rendering:auto;
+}
+:root.koma-continuous :where(.reading-content .page-break,#readerarea,.wp-manga-chapter-img-wrap) {
+  padding-block:0 !important; margin-block:0 !important; gap:0 !important;
+}
+:root.koma-continuous :where(.reading-content .page-break,#readerarea,.wp-manga-chapter-img-wrap) img:not([usemap]) {
+  margin-block:0 !important;
 }
