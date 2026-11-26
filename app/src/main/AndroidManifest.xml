@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
  <uses-permission android:name="android.permission.INTERNET"/>
- <application android:enableOnBackInvokedCallback="false" android:label="Koma" android:theme="@style/KomaTheme" android:icon="@drawable/koma_icon" android:usesCleartextTraffic="false" android:allowBackup="false" android:networkSecurityConfig="@xml/network_security" android:debuggable="false" android:hardwareAccelerated="true">
+ <application android:enableOnBackInvokedCallback="false" android:label="Koma" android:theme="@style/KomaTheme" android:icon="@drawable/koma_icon" android:usesCleartextTraffic="false" android:allowBackup="false" android:networkSecurityConfig="@xml/network_security" android:hardwareAccelerated="true">
   <activity android:name=".OfflineActivity" android:exported="false" android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize"/>
   <activity android:name=".Reader" android:exported="true" android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize">
    <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
