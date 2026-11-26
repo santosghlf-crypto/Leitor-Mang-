@@ -28,18 +28,8 @@ jobs:
           set +o pipefail
           yes | "$manager" --sdk_root="$sdk" --licenses
           set -o pipefail
-          # SDK 37 can be on a preview channel; never substitute SDK 36.
-          "$manager" --sdk_root="$sdk" --list --channel=3 > "$RUNNER_TEMP/sdk-list.txt"
-          cat "$RUNNER_TEMP/sdk-list.txt"
-          platform="$(awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $1); if($1=="platforms;android-37"){print $1;exit}}' "$RUNNER_TEMP/sdk-list.txt")"
-          if [ -z "$platform" ]; then
-            platform="$(awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $1); if($1=="platforms;android-CinnamonBun"){print $1;exit}}' "$RUNNER_TEMP/sdk-list.txt")"
-            if [ -n "$platform" ]; then echo "KOMA_COMPILE_PREVIEW=CinnamonBun" >> "$GITHUB_ENV"; fi
-          fi
-          if [ -z "$platform" ]; then echo "::error::SDK 37/CinnamonBun ausente do catálogo oficial"; exit 1; fi
-          buildtools="$(awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $1); if($1 ~ /^build-tools;37\./)print $1}' "$RUNNER_TEMP/sdk-list.txt" | sort -Vu | tail -1)"
-          if [ -z "$buildtools" ]; then buildtools="build-tools;36.0.0"; fi
-          "$manager" --sdk_root="$sdk" --install --channel=3 "$platform" "$buildtools" "platform-tools"
+          # Google now publishes major.minor platform names.
+          "$manager" --sdk_root="$sdk" --install "platforms;android-37.0" "build-tools;37.0.0" "platform-tools"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.4.1'
