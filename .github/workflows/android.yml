@@ -54,6 +54,8 @@ jobs:
         run: |
           javac -d "$RUNNER_TEMP/koma-tests" app/src/main/java/br/app/koma/OfflinePolicy.java tools/tests/OfflinePolicyTest.java
           java -cp "$RUNNER_TEMP/koma-tests" br.app.koma.OfflinePolicyTest
+      - name: Verificar escopo simplificado
+        run: python3 tools/test_product_scope.py
       - name: Testar auditoria de desempenho
         run: node --test tools/tests/audit.test.cjs
       - name: Configurar assinatura persistente opcional

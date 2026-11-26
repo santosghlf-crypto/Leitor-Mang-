@@ -58,7 +58,7 @@ public class Reader extends Activity {
     int blockedNavigation;
     WebExtension.Port readerPort;
     TextView autoButton, previousButton, nextButton, readingPercent;
-    LinearLayout readingTools;
+    LinearLayout readingTools,chapterActions;
     String nextChapter, previousChapter;
     boolean autoRunning, chapterDetected;
     int readingProgress;
@@ -212,7 +212,7 @@ public class Reader extends Activity {
     void heading(LinearLayout l,String top,String sub){
         fill(l,bold(top,25,WHITE));space(l,5);fill(l,text(sub,13,MUTED));space(l,14);
     }
-    int shelfColumns(){int custom=prefs.getInt("gridColumns",0);return custom==2||custom==3?custom:getResources().getDisplayMetrics().widthPixels/dp(1)>=650?3:2;}
+    int shelfColumns(){int custom=prefs.getInt("gridColumns",0),width=getResources().getConfiguration().screenWidthDp;return custom==2?2:custom==3&&width>=500?3:width>=650?3:2;}
     final class NavIcon extends View{
         final int type;final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);
         NavIcon(int type,int color){super(Reader.this);this.type=type;p.setColor(color);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(1.7f);p.setStrokeCap(Paint.Cap.ROUND);p.setStrokeJoin(Paint.Join.ROUND);}
@@ -263,8 +263,8 @@ public class Reader extends Activity {
             LinearLayout empty=col();pad(empty,20,30);empty.setBackground(border(PANEL,20,LINE));
             TextView symbol=bold("▤",46,MINT);symbol.setGravity(Gravity.CENTER);fill(empty,symbol);space(empty,16);
             TextView title=bold(sites.length()==0?"Sua próxima história começa aqui":favoritesOnly?"Nenhuma fonte favorita":"Nenhuma fonte encontrada",19,WHITE);title.setGravity(Gravity.CENTER);fill(empty,title);space(empty,9);
-            TextView desc=text(sites.length()==0?"Adicione um endereço HTTPS. Cada site vira uma fonte independente na estante.":"Altere a busca ou marque suas fontes favoritas.",14,MUTED);desc.setGravity(Gravity.CENTER);fill(empty,desc);
-            if(sites.length()==0){space(empty,20);fill(empty,button("Adicionar meu primeiro site",true,()->editSite(null)));}fill(shelfSummary,empty);
+            TextView desc=text(sites.length()==0?"Adicione o endereço de um site usando o botão acima.":"Altere a busca ou marque suas fontes favoritas.",14,MUTED);desc.setGravity(Gravity.CENTER);fill(empty,desc);
+            fill(shelfSummary,empty);
         }else{
             if(!favoritesOnly&&q.isEmpty()&&history.length()>0){
                 JSONObject h=history.optJSONObject(0);if(h!=null){String site=h.optString("source");if(has(site)){
@@ -534,7 +534,7 @@ public class Reader extends Activity {
             prefs.edit().putString(key("cover",s),u.toString()).apply();covers.invalidate(u.toString());library();}
         catch(Exception e){toast("Não foi possível salvar essa capa.");}}
     void remove(String s){
-        if(!manga.forSource(s).isEmpty()){toast("Remova ou preserve suas obras antes de excluir a fonte.");return;}
+        if(!manga.forSource(s).isEmpty()){toast("Esta fonte tem obras vinculadas. Exclua-as individualmente se realmente desejar removê-las.");return;}
         String old=prefs.getString(key("context",s),"");
         if(!old.isEmpty())engine.getStorageController().clearDataForSessionContext(old);
         readingPositions.removeSource(s);
@@ -631,7 +631,7 @@ public class Reader extends Activity {
         fill(privacy,text("● HTTPS obrigatório e proteção contra sites perigosos\n● Cookies separados por fonte\n● Câmera, microfone e localização negados\n● Pop-ups automáticos e navegação para outros domínios bloqueados\n● Depuração remota desativada",14,MUTED));space(privacy,12);
         fill(privacy,text("Bloqueios de navegação nesta execução: "+blockedNavigation+" (não são contagem de anúncios do uBlock).",12,MUTED));
         space(privacy,8);fill(privacy,text("Para abrir outro domínio, adicione uma nova fonte. Para apagar a sessão de um site, use as opções da fonte.",13,MUTED));fill(shelfContent,privacy);space(shelfContent,16);
-        fill(shelfContent,button("Downloads antigos",false,()->{tab=4;library();}));space(shelfContent,16);
+        fill(shelfContent,button("Downloads antigos",false,()->{tab=4;library();}));space(shelfContent,8);fill(shelfContent,text("Apenas capítulos salvos em versões anteriores.",12,MUTED));space(shelfContent,16);
         LinearLayout reading=col();pad(reading,16,16);reading.setBackground(border(PANEL,16,LINE));fill(reading,bold("Como usar",18,WHITE));space(reading,9);
         fill(reading,text("• Voltar mostra os controles durante a tela cheia.\n• Use os controles inferiores para rolagem automática e capítulos reconhecidos.\n• Ajuste brilho e rotação nas preferências da fonte.\n• O Koma guarda as últimas posições por página.",14,MUTED));fill(shelfContent,reading);space(shelfContent,22);
         fill(shelfContent,text("KOMA 7.2  ·  GeckoView 161  ·  ARM64",12,MUTED));
@@ -642,8 +642,8 @@ public class Reader extends Activity {
         fill(panel,text("Escolha a identidade visual do Koma. As imagens dos capítulos não são recoloridas.",13,MUTED));space(panel,12);
         String[] names={"Grafite e menta","Preto AMOLED","Azul noturno"};
         fill(panel,button("Tema: "+names[themeChoice],false,()->new AlertDialog.Builder(this).setTitle("Tema do aplicativo").setSingleChoiceItems(names,themeChoice,(d,i)->{d.dismiss();if(i!=themeChoice){prefs.edit().putInt("themeChoice",i).apply();recreate();}}).show()));space(panel,8);
-        String[] sizes={"Automático","2 colunas","3 colunas"};int current=prefs.getInt("gridColumns",0);
-        fill(panel,button("Grade: "+sizes[current==2?1:current==3?2:0],false,()->new AlertDialog.Builder(this).setTitle("Colunas da estante").setSingleChoiceItems(sizes,current==2?1:current==3?2:0,(d,i)->{prefs.edit().putInt("gridColumns",i==0?0:i+1).apply();d.dismiss();library();}).show()));space(panel,8);
+        boolean wide=getResources().getConfiguration().screenWidthDp>=500;String[] sizes=wide?new String[]{"Automático","2 colunas","3 colunas"}:new String[]{"Automático","2 colunas"};int current=prefs.getInt("gridColumns",0);if(current==3&&!wide)current=0;final int gridSelection=current==2?1:current==3?2:0;
+        fill(panel,button("Grade: "+sizes[gridSelection],false,()->new AlertDialog.Builder(this).setTitle("Colunas da estante").setSingleChoiceItems(sizes,gridSelection,(d,i)->{prefs.edit().putInt("gridColumns",i==0?0:i+1).apply();d.dismiss();library();}).show()));space(panel,8);
         Switch compact=new Switch(this);compact.setText("Capas compactas");compact.setChecked(prefs.getBoolean("compactCards",false));compact.setOnCheckedChangeListener((v,on)->prefs.edit().putBoolean("compactCards",on).apply());fill(panel,compact);
         fill(panel,button("Tamanho dos textos",false,()->new AlertDialog.Builder(this).setTitle("Tamanho dos textos").setItems(new String[]{"Pequeno","Padrão","Grande"},(d,i)->{prefs.edit().putFloat("fontScale",i==0?.9f:i==2?1.12f:1f).apply();library();}).show()));
         fill(shelfContent,panel);
@@ -702,10 +702,10 @@ public class Reader extends Activity {
             root.addView(browser,new LinearLayout.LayoutParams(-1,0,1));
             readingTools=col();pad(readingTools,10,9);readingTools.setBackgroundColor(PANEL);
             LinearLayout info=row();readingPercent=text("Posição na página: —",12,MUTED);weighted(info,readingPercent,-2);
-            info.addView(button("Ajustes",false,()->siteSettings(source)));fill(readingTools,info);space(readingTools,6);
-            LinearLayout controls=row();previousButton=button("‹ Anterior",false,()->navigateChapter(previousChapter));autoButton=button("▶ Auto",true,this::toggleAuto);nextButton=button("Próximo ›",false,()->navigateChapter(nextChapter));
+            info.addView(button("Ajustes",false,()->siteSettings(source)));fill(readingTools,info);
+            LinearLayout controls=row();chapterActions=controls;previousButton=button("‹ Anterior",false,()->navigateChapter(previousChapter));autoButton=button("▶ Auto",true,this::toggleAuto);nextButton=button("Próximo ›",false,()->navigateChapter(nextChapter));
             for(TextView b:new TextView[]{previousButton,autoButton,nextButton}){LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,dp(48),1);if(b!=previousButton)p.leftMargin=dp(6);controls.addView(b,p);}
-            fill(readingTools,controls);fill(root,readingTools);
+            controls.setPadding(0,dp(6),0,0);fill(readingTools,controls);fill(root,readingTools);
         }
         GeckoSessionSettings settings=new GeckoSessionSettings.Builder().contextId(isDashboard?"koma-ublock-panel":contextFor(s)).build();
         session=new GeckoSession(settings);
@@ -785,9 +785,10 @@ public class Reader extends Activity {
     void resetChapterControls(){autoRunning=false;chapterDetected=false;nextChapter=null;previousChapter=null;readingProgress=0;}
     void updateChapterControls(){
         if(readingTools==null||dashboard||session==null)return;
-        if(previousButton!=null){previousButton.setEnabled(previousChapter!=null);previousButton.setAlpha(previousChapter==null?.45f:1f);}
-        if(nextButton!=null){nextButton.setEnabled(nextChapter!=null);nextButton.setAlpha(nextChapter==null?.45f:1f);}
-        if(autoButton!=null){boolean enabled=readerPort!=null&&chapterDetected;autoButton.setEnabled(enabled);autoButton.setAlpha(enabled?1f:.45f);String label=autoRunning?"Ⅱ Pausar":"▶ Auto";if(!TextUtils.equals(autoButton.getText(),label))autoButton.setText(label);}
+        if(previousButton!=null){previousButton.setEnabled(previousChapter!=null);previousButton.setVisibility(previousChapter==null?View.GONE:View.VISIBLE);}
+        if(nextButton!=null){nextButton.setEnabled(nextChapter!=null);nextButton.setVisibility(nextChapter==null?View.GONE:View.VISIBLE);}
+        if(autoButton!=null){boolean enabled=readerPort!=null&&chapterDetected;autoButton.setEnabled(enabled);autoButton.setVisibility(enabled?View.VISIBLE:View.GONE);String label=autoRunning?"Ⅱ Pausar":"▶ Auto";if(!TextUtils.equals(autoButton.getText(),label))autoButton.setText(label);}
+        if(chapterActions!=null)chapterActions.setVisibility(chapterDetected&&readerPort!=null?View.VISIBLE:View.GONE);
         if(readingPercent!=null){String label=chapterDetected?"Posição: "+readingProgress+"%":"Navegação manual";if(!TextUtils.equals(readingPercent.getText(),label))readingPercent.setText(label);}
     }
     void sendReaderCommand(String type,JSONObject data){
@@ -959,7 +960,7 @@ public class Reader extends Activity {
     void setFull(boolean v){full=v;bar.setVisibility(v?View.GONE:View.VISIBLE);
         if(readingTools!=null&&!dashboard){readingTools.setVisibility(v?View.GONE:View.VISIBLE);updateChapterControls();if(!v)sendReaderCommand("status",null);}
         root.setFitsSystemWindows(!v);root.requestApplyInsets();immersive();}
-    void release(){pauseAuto();flushPosition();positionSource=null;positionUrl=null;clearReaderPort();if(session!=null){GeckoSession old=session;session=null;browser.releaseSession();old.close();browser=null;}readingTools=null;autoButton=null;previousButton=null;nextButton=null;readingPercent=null;resetReadingWindow();}
+    void release(){pauseAuto();flushPosition();positionSource=null;positionUrl=null;clearReaderPort();if(session!=null){GeckoSession old=session;session=null;browser.releaseSession();old.close();browser=null;}readingTools=null;chapterActions=null;autoButton=null;previousButton=null;nextButton=null;readingPercent=null;resetReadingWindow();}
     void closeReader(){release();saveWorks();activeWork=null;authorizedWorkUrl=null;source=null;pageUrl=null;library();}
     @Override public void onBackPressed(){if(session==null){if(tab!=3){tab=3;library();}else super.onBackPressed();}else if(full){pauseAuto();setFull(false);}else if(canBack){pauseAuto();session.goBack();}else closeReader();}
     @Override public void onWindowFocusChanged(boolean focus){super.onWindowFocusChanged(focus);if(focus&&full)immersive();}
