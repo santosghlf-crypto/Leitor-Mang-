@@ -402,7 +402,7 @@ public class Reader extends Activity {
         space(perf,8);fill(perf,text("Cache de capas: até "+(covers.limitBytes()/1048576)+" MiB. Imagens de capítulos continuam sob controle do Gecko.",12,MUTED));fill(shelfContent,perf);space(shelfContent,16);
         LinearLayout reading=col();pad(reading,16,16);reading.setBackground(border(PANEL,16,LINE));fill(reading,bold("Como usar",18,WHITE));space(reading,9);
         fill(reading,text("• Voltar mostra os controles durante a tela cheia.\n• Ajuste o modo e a capa em cada fonte.\n• O Koma salva a página e tenta recuperar a posição em leitores compatíveis.",14,MUTED));fill(shelfContent,reading);space(shelfContent,22);
-        fill(shelfContent,text("KOMA 3.1  ·  GeckoView 150  ·  ARM64",12,MUTED));
+        fill(shelfContent,text("KOMA 3.2  ·  GeckoView 161  ·  ARM64",12,MUTED));
     }
     void toast(String s){Toast.makeText(this,s,Toast.LENGTH_SHORT).show();}
     void openDashboard(){

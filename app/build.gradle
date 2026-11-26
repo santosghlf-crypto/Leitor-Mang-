@@ -3,19 +3,23 @@ plugins {
 }
 android {
     namespace 'br.app.koma'
-    compileSdk 36
+    if (System.getenv("KOMA_COMPILE_PREVIEW") == "CinnamonBun") {
+        compileSdkPreview "CinnamonBun"
+    } else {
+        compileSdk 37
+    }
     defaultConfig {
         applicationId 'br.app.koma'
         minSdk 26
         targetSdk 35
-        versionCode 4
-        versionName '3.1'
+        versionCode 5
+        versionName '3.2'
         ndk { abiFilters 'arm64-v8a' }
     }
     sourceSets.main.assets.srcDir layout.buildDirectory.dir('generated/extensionAssets').get().asFile
     androidResources { ignoreAssetsPattern '!.svn:!.git:!CVS:!*~' }
 }
-dependencies { implementation 'org.mozilla.geckoview:geckoview:150.0.20260511200624' }
+dependencies { implementation 'org.mozilla.geckoview:geckoview:161.0.20261118180411' }
 def blocker = tasks.register('prepareBlocker', Exec) {
     def output = layout.buildDirectory.dir('generated/extensionAssets/ublock')
     inputs.file rootProject.file('tools/blocker.py')

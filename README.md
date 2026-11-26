@@ -8,7 +8,7 @@ A compilação requer internet para obter GeckoView, as ferramentas do Android e
 Abra Actions → Gerar APK. Quando a tarefa terminar, baixe Koma-Android-arm64 na seção Artifacts. Extraia o ZIP e abra app-debug.apk no celular.
 
 **No computador**  
-Use JDK 17, Python 3, Android SDK Platform 36 e Gradle 9.4.1. Configure ANDROID_HOME para a pasta do SDK. Na pasta que contém settings.gradle, execute:
+Use JDK 17, Python 3, Android SDK Platform 37/CinnamonBun e Gradle 9.4.1. Configure ANDROID_HOME para a pasta do SDK. Na pasta que contém settings.gradle, execute:
 
     gradle :app:assembleDebug
 
