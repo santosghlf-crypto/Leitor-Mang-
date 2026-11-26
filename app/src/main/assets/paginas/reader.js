@@ -142,9 +142,6 @@
       autoWait=setTimeout(()=>{
         autoWait=null;if(!auto||finished||document.hidden){stopAuto();return;}
         if(window.scrollY<maxScroll()-3&&atEnd){lastFrame=0;stalledAt=null;raf=requestAnimationFrame(autoFrame);return;}
-        if(atEnd&&window.scrollY>=maxScroll()-3&&configNow.autoNext===true){
-          publish(true);const next=chapterLink("next",true);if(next)post("autoEnd",{next});
-        }
         stopAuto();
       },2500);return;
     }
@@ -155,59 +152,19 @@
     stopAuto(false);if(restoring)stopRestore();progressReady=true;tracker.activate();
     configNow.speed=clampSpeed(speed);auto=true;publish(true);raf=requestAnimationFrame(autoFrame);
   }
-  let offlineBusy=false,offlineAbortController=null,offlineRequestToken=null;
-  async function saveOffline(token){
-    if(offlineBusy||!hasChapter(true)||!port)return;
-    offlineBusy=true;const current=location.href,connection=port;
-    const abort=new AbortController();offlineAbortController=abort;offlineRequestToken=token;
-    const ack=async(type,extra={})=>{
-      if(abort.signal.aborted||finished||document.hidden||location.href!==current||port!==connection)throw Error("cancelled");
-      if(await send({type,url:current,token,...extra})!==true)throw Error("not accepted");
-    };
-    const sameOrigin=u=>{try{const v=new URL(u,current);return v.protocol==="https:"&&v.origin===location.origin&&!v.username&&!v.password?v.href:null;}catch(e){return null;}};
-    const to64=b=>{let raw="";for(let i=0;i<b.length;i+=8192)raw+=String.fromCharCode(...b.subarray(i,i+8192));return btoa(raw);};
-    try{
-      const matches=document.querySelectorAll(SELECTOR);
-      if(matches.length<1||matches.length>120)throw Error("unsupported images");
-      const nodes=Array.from(matches);
-      if(nodes.some(img=>!img.complete||!img.naturalWidth||!img.naturalHeight||!sameOrigin(imageKey(img))))throw Error("unsupported images");
-      const urls=nodes.map(img=>sameOrigin(imageKey(img)));
-      const title=KomaAdapter.text(document,activeAdapter.title)||document.title||"Capítulo";
-      await ack("offlineBegin",{count:urls.length,title:title.slice(0,120)});
-      let chapterBytes=0;
-      for(let index=0;index<urls.length;index++){
-        // Same-origin Gecko request; never uses a separate HTTP client or bypasses CORS.
-        const response=await fetch(urls[index],{mode:"same-origin",credentials:"same-origin",redirect:"error",cache:"force-cache",signal:abort.signal});
-        if(!response.ok||!response.body||!sameOrigin(response.url)||!/^(image\/(jpeg|png|webp))(;|$)/i.test(response.headers.get("content-type")||""))throw Error("format");
-        const reader=response.body.getReader();let size=0;
-        try{
-          for(;;){const part=await reader.read();if(part.done)break;size+=part.value.byteLength;chapterBytes+=part.value.byteLength;
-            if(size>16*1048576||chapterBytes>100*1048576)throw Error("size");
-            for(let start=0;start<part.value.byteLength;start+=49152)await ack("offlineChunk",{index,data:to64(part.value.subarray(start,start+49152))});
-          }
-        }finally{try{await reader.cancel();}catch(e){}}
-        if(size===0)throw Error("empty");await ack("offlineImage",{index});
-      }
-      await ack("offlineFinish");
-    }catch(e){abort.abort();try{await send({type:"offlineAbort",url:current,token});}catch(ignored){}}
-    finally{offlineBusy=false;offlineAbortController=null;offlineRequestToken=null;}
-  }
   function connectReader(){
     if(port||!configNow||finished)return;
     try{
       const connection=browser.runtime.connectNative("koma");port=connection;lastStatus="";
-      connection.onDisconnect.addListener(()=>{if(port===connection){offlineAbortController?.abort();port=null;stopAuto(false);}});
+      connection.onDisconnect.addListener(()=>{if(port===connection){port=null;stopAuto(false);}});
       connection.onMessage.addListener(m=>{
         if(port!==connection||!m||m.url!==location.href||finished)return;
         if(m.type==="start")startAuto(m.speed);
         else if(m.type==="stop")stopAuto();
         else if(m.type==="status")publish(true);
-        else if(m.type==="offlineStart"&&typeof m.token==="string"&&m.token.length===36)saveOffline(m.token);
-        else if(m.type==="offlineCancel"&&m.token===offlineRequestToken)offlineAbortController?.abort();
         else if(m.type==="extract"&&["work","catalog","chapters"].includes(m.kind)&&typeof m.request==="string"&&m.request.length<=64){post("extraction",{request:m.request,kind:m.kind,...KomaAdapter.extract(document,activeAdapter,m.kind,location.href)});}
         else if(m.type==="settings"){
-          stopAuto();configNow.doubleTap=m.doubleTap===true;configNow.autoNext=m.autoNext===true;configNow.speed=clampSpeed(m.speed);
-          document.documentElement.classList.toggle("koma-doubletap",configNow.doubleTap);taps.reset();publish(true);
+          stopAuto();configNow.speed=clampSpeed(m.speed);publish(true);
         }
       });
       publish(true);
@@ -215,20 +172,9 @@
   }
   function disconnectReader(){
     if(statusTimer!==null)clearTimeout(statusTimer);statusTimer=null;stopAuto(false);
-    offlineAbortController?.abort();const p=port;port=null;if(p)try{p.disconnect();}catch(e){}
+    const p=port;port=null;if(p)try{p.disconnect();}catch(e){}
   }
-  function interactive(target){return !(target instanceof Element)||!!target.closest("a,button,input,textarea,select,label,[contenteditable],[role=button]");}
-  document.addEventListener("pointerdown",event=>{
-    if(!event.isTrusted)return;if(auto)stopAuto();
-    if(!configNow?.doubleTap||!event.isPrimary||!["touch","pen"].includes(event.pointerType)||interactive(event.target)||!event.target.matches(SELECTOR)){pointer=null;taps.reset();return;}
-    pointer={id:event.pointerId,x:event.clientX,y:event.clientY,t:performance.now(),target:event.target};
-  },{passive:true,capture:true});
-  document.addEventListener("pointerup",event=>{
-    const p=pointer;pointer=null;
-    if(!p||!event.isTrusted||event.pointerId!==p.id||event.target!==p.target||performance.now()-p.t>250||Math.hypot(event.clientX-p.x,event.clientY-p.y)>12){taps.reset();return;}
-    if(taps.tap(event.clientX,event.clientY,performance.now()))send({type:"toggleControls",url:location.href}).catch(()=>{});
-  },{passive:true,capture:true});
-  document.addEventListener("pointercancel",()=>{pointer=null;taps.reset();},{passive:true});
+  document.addEventListener("pointerdown",event=>{if(event.isTrusted&&auto)stopAuto();},{passive:true,capture:true});
   for(const event of ["wheel","keydown"])addEventListener(event,e=>{if(e.isTrusted&&auto)stopAuto();},{passive:true});
 
 
@@ -395,10 +341,10 @@
     configNow=config;activeAdapter=KomaAdapter.profile(config.adapter);metadata.invalidate();
     restoreTarget=Math.max(0,Math.min(10000000,Number(config.y)||0));progressReady=restoreTarget<=0||user;
     if(activeAdapter.reader){CONTAINERS=activeAdapter.reader;SELECTOR=CONTAINERS+" img:not([usemap])";}
-    document.documentElement.classList.toggle("koma-doubletap",config.doubleTap===true);connectReader();
+    connectReader();
     const mode=config.mode;
     if(mode==="fit"||mode==="continuous"){
-      document.documentElement.classList.add("koma-"+mode);startImages(config.predecode===true);
+      document.documentElement.classList.add("koma-"+mode);startImages(false);
     }
     if(progressReady){tracker.activate();return;}
     restoring=true;restore();

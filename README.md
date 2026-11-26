@@ -42,3 +42,7 @@ Perfis de fontes: [EXTENSIONS.md](EXTENSIONS.md).
 
 ## Koma 7.0
 Aparência e leitura offline: [OFFLINE.md](OFFLINE.md).
+
+
+## Koma 7.2
+Veja [PRODUCT-AUDIT.md](PRODUCT-AUDIT.md) para o escopo simplificado e os recursos retirados.

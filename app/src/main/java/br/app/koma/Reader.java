@@ -31,10 +31,6 @@ public class Reader extends Activity {
     static final int PICK_COVER=42;
     OfflineStore offline;
     final ExecutorService offlineWorker=Executors.newSingleThreadExecutor();
-    OfflineStore.Transfer transfer; // worker-only
-    volatile String offlineToken;String offlineUrl;
-    ProgressDialog downloadDialog;
-    final Runnable offlineTimeout=()->cancelDownload("Download interrompido: a fonte não respondeu.");
     int themeChoice=0;
     GeckoRuntime engine;
     GeckoSession session;
@@ -68,7 +64,7 @@ public class Reader extends Activity {
     int readingProgress;
     ReadingPositions readingPositions;
     String extractToken,extractUrl,extractKind;
-    final Runnable extractTimeout=()->{if(extractToken!=null){clearExtraction();toast("A página não respondeu. Recarregue e tente novamente.");}};
+    final Runnable extractTimeout=()->{if(extractToken!=null){boolean work="work".equals(extractKind)&&Objects.equals(extractUrl,pageUrl);clearExtraction();if(work&&session!=null&&foreground)editWork(null,source,pageUrl);else toast("A página não respondeu. Recarregue e tente novamente.");}};
     MangaLibrary manga;
     String activeWork,pendingWork,pickWork,workQuery="",authorizedWorkUrl;
     int workFilter=0,workSort=0;
@@ -90,7 +86,7 @@ public class Reader extends Activity {
         offline=new OfflineStore(getFilesDir());offlineWorker.execute(offline::cleanup);
         sites=array("sites"); history=array("history");
         readingPositions=new ReadingPositions(prefs.getString("chapterPositions","[]"));
-        manga=new MangaLibrary(prefs.getString("mangaLibrary","[]"));
+        manga=new MangaLibrary(prefs.getString("mangaLibrary","[]"));if(sites.length()==0)tab=0;
         covers=new CoverLoader(getApplicationContext());
         if(saved!=null){pending=saved.getString("source");pickSite=saved.getString("pickSite");pendingWork=saved.getString("work");pickWork=saved.getString("pickWork");tab=saved.getInt("tab",0);}
         engine=GeckoRuntime.getDefault(this);
@@ -184,8 +180,8 @@ public class Reader extends Activity {
         TextView logo=bold("K",23,INK);logo.setTypeface(Typeface.create("sans-serif-black",Typeface.BOLD));logo.setGravity(Gravity.CENTER);logo.setBackground(bg(MINT,12));
         header.addView(logo,new LinearLayout.LayoutParams(dp(42),dp(42)));
         LinearLayout brand=col();brand.setPadding(dp(12),0,0,0);
-        fill(brand,bold("KOMA",20,WHITE));space(brand,3);fill(brand,text("LEITURA  •  SEM DISTRAÇÕES",9,MUTED));weighted(header,brand,-2);
-        TextView protection=bold(ready?"● Protegido":failed?"● Erro":"● Iniciando",11,ready?MINT:WARN);
+        fill(brand,bold("KOMA",20,WHITE));space(brand,3);fill(brand,text("Seu leitor",11,MUTED));weighted(header,brand,-2);
+        TextView protection=bold(ready?"uBlock ativo":failed?"Falha uBlock":"Iniciando",11,ready?MINT:WARN);
         pad(protection,10,9);protection.setBackground(bg(PANEL,20));protection.setOnClickListener(v->{tab=2;library();});
         header.addView(protection);fill(root,header);
         shelfContent=col();pad(shelfContent,20,9);
@@ -203,10 +199,10 @@ public class Reader extends Activity {
             if(tab==1)buildHistory();else if(tab==4)buildDownloads();else buildSettings();
         }
         line(root);bottom=row();pad(bottom,12,7);
-        String[] labels={"Estante","Fontes","Offline","Histórico","Ajustes"};int[] order={3,0,4,1,2};
+        String[] labels={"Estante","Fontes","Histórico","Ajustes"};int[] order={3,0,1,2};
         for(int i=0;i<order.length;i++){
             final int index=order[i];boolean selected=tab==index;LinearLayout b=col();b.setGravity(Gravity.CENTER);b.setMinimumHeight(dp(58));b.setBackground(bg(selected?PANEL:BG,14));
-            NavIcon icon=new NavIcon(i,selected?MINT:MUTED);b.addView(icon,new LinearLayout.LayoutParams(dp(24),dp(24)));space(b,4);
+            NavIcon icon=new NavIcon(i<2?i:i+1,selected?MINT:MUTED);b.addView(icon,new LinearLayout.LayoutParams(dp(24),dp(24)));space(b,4);
             TextView title=bold(labels[i],10,selected?MINT:MUTED);title.setGravity(Gravity.CENTER);title.setSingleLine();fill(b,title);
             b.setContentDescription(labels[i]);b.setSelected(selected);b.setFocusable(true);b.setOnClickListener(v->{tab=index;query="";library();});weighted(bottom,b,-2);
         }
@@ -214,7 +210,7 @@ public class Reader extends Activity {
     }
 
     void heading(LinearLayout l,String top,String sub){
-        fill(l,bold(top,29,WHITE));space(l,7);fill(l,text(sub,14,MUTED));space(l,19);
+        fill(l,bold(top,25,WHITE));space(l,5);fill(l,text(sub,13,MUTED));space(l,14);
     }
     int shelfColumns(){int custom=prefs.getInt("gridColumns",0);return custom==2||custom==3?custom:getResources().getDisplayMetrics().widthPixels/dp(1)>=650?3:2;}
     final class NavIcon extends View{
@@ -232,7 +228,7 @@ public class Reader extends Activity {
         heading(shelfContent,"Minhas fontes",sites.length()==0?"Comece a montar sua coleção.":sites.length()+" fontes na sua coleção");
         fill(shelfContent,button("+  Adicionar fonte",true,()->editSite(null)));space(shelfContent,18);
         search=new EditText(this);search.setSingleLine();search.setTextSize(14);search.setTextColor(WHITE);search.setHintTextColor(MUTED);
-        search.setHint("Buscar na estante");search.setText(query);search.setBackground(border(PANEL,13,LINE));pad(search,15,12);
+        search.setHint("Buscar fontes");search.setText(query);search.setBackground(border(PANEL,13,LINE));pad(search,15,12);
         fill(shelfContent,search);space(shelfContent,12);filters=row();fill(shelfContent,filters);
         for(int i=0;i<2;i++){
             final boolean f=i==1;TextView chip=button(f?"★  Favoritos":"Todas as fontes",favoritesOnly==f,()->{
@@ -373,8 +369,8 @@ public class Reader extends Activity {
     void saveWorks(){ui.removeCallbacks(workFlush);worksScheduled=false;if(worksDirty){prefs.edit().putString("mangaLibrary",manga.serialize()).apply();worksDirty=false;}}
     void dirtyWorks(boolean immediately){worksDirty=true;if(immediately){saveWorks();return;}if(!worksScheduled){worksScheduled=true;ui.postDelayed(workFlush,4000);}}
     void buildWorks(){
-        heading(shelfContent,"Minha biblioteca",manga.size()+" obras acompanhadas");
-        fill(shelfContent,button("+ Adicionar obra",true,()->editWork(null,null,null)));space(shelfContent,14);
+        heading(shelfContent,"Estante",manga.size()+" obras acompanhadas");
+        fill(shelfContent,button(sites.length()==0?"Adicionar primeira fonte":"+ Adicionar obra",true,()->{if(sites.length()==0){tab=0;editSite(null);}else editWork(null,null,null);}));space(shelfContent,12);
         search=new EditText(this);search.setSingleLine();search.setTextSize(14);search.setTextColor(WHITE);search.setHintTextColor(MUTED);
         search.setHint("Buscar mangá, manhwa ou fonte");search.setText(workQuery);search.setBackground(border(PANEL,13,LINE));pad(search,15,12);fill(shelfContent,search);space(shelfContent,10);
         LinearLayout choices=row();
@@ -447,13 +443,13 @@ public class Reader extends Activity {
     }
     void editWork(String id,String suggestedSource,String suggestedUrl){editWork(id,suggestedSource,suggestedUrl,"","");}
     void editWork(String id,String suggestedSource,String suggestedUrl,String suggestedTitle,String suggestedChapter){
-        pauseAuto();MangaLibrary.Work existing=manga.get(id);
+        pauseAuto();final String openedPage=pageUrl;MangaLibrary.Work existing=manga.get(id);
         ArrayList<String> options=new ArrayList<>();ArrayList<String> labels=new ArrayList<>();
         for(int i=0;i<sites.length();i++){String site=sites.optString(i);if(checked(site)!=null){options.add(site);labels.add(name(site));}}
         if(options.isEmpty()){toast("Adicione uma fonte primeiro.");return;}
         ScrollView scroll=new ScrollView(this);LinearLayout form=col();pad(form,22,12);scroll.addView(form);
         EditText title=new EditText(this);title.setSingleLine();title.setHint("Nome da obra");title.setFilters(new InputFilter[]{new InputFilter.LengthFilter(120)});title.setText(existing==null?suggestedTitle:existing.title);fill(form,text("Nome",13,MUTED));fill(form,title);space(form,12);
-        Spinner sources=new Spinner(this);sources.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,labels));String chosen=existing!=null?existing.source:suggestedSource;int selected=options.indexOf(chosen);sources.setSelection(Math.max(0,selected));sources.setEnabled(existing==null);
+        Spinner sources=new Spinner(this);sources.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,labels));String chosen=existing!=null?existing.source:suggestedSource;int selected=options.indexOf(chosen);sources.setSelection(Math.max(0,selected));sources.setEnabled(existing==null&&suggestedSource==null);
         fill(form,text("Fonte",13,MUTED));fill(form,sources);space(form,12);
         EditText home=new EditText(this);home.setSingleLine();home.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_URI);home.setHint("Endereço da obra ou capítulo inicial");home.setText(existing!=null?existing.home:suggestedUrl==null?"":suggestedUrl);
         fill(form,text("Endereço de entrada",13,MUTED));fill(form,home);space(form,12);
@@ -469,7 +465,7 @@ public class Reader extends Activity {
             if(w==null){home.setError("Obra duplicada, limite atingido ou endereço inválido.");return;}
             dirtyWorks(true);d.dismiss();
             if(session!=null&&!dashboard&&site.equals(source)&&SecurityPolicy.sameSite(site,pageUrl)){
-                if(existing==null&&Objects.equals(suggestedUrl,pageUrl)&&url.equals(pageUrl)){activeWork=w.id;authorizedWorkUrl=pageUrl;readerTitle.setText(w.title);if(chapterDetected)manga.update(w.id,source,pageUrl,readingProgress);dirtyWorks(true);}
+                if(existing==null&&Objects.equals(suggestedSource,source)&&Objects.equals(openedPage,pageUrl)){activeWork=w.id;authorizedWorkUrl=pageUrl;readerTitle.setText(w.title);if(chapterDetected){String label=w.chapter;manga.update(w.id,source,pageUrl,readingProgress);w.chapter=label;}dirtyWorks(true);}
                 toast("Obra salva na biblioteca.");
             }else{tab=3;library();}
         });
@@ -516,11 +512,11 @@ public class Reader extends Activity {
             if(existing==null){sites.put(s);saveSites();}d.dismiss();tab=0;query="";favoritesOnly=false;library();});
     }
     void siteMenu(String s){
-        String[] opts={"Editar nome","Escolher capa","Remover capa",favorite(s)?"Remover dos favoritos":"Adicionar aos favoritos","Configurações de leitura","Abrir página inicial","Limpar cookies e sessão","Remover fonte","Configurar extensão"};
+        String[] opts={"Editar nome","Escolher capa","Remover capa",favorite(s)?"Remover dos favoritos":"Adicionar aos favoritos","Configurações de leitura","Abrir página inicial","Limpar cookies e sessão","Remover fonte","Perfil da fonte (avançado)"};
         new AlertDialog.Builder(this).setTitle(name(s)).setItems(opts,(d,i)->{
             switch(i){case 0:editSite(s);break;case 1:pickSite=s;Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);intent.setType("image/*");intent.addCategory(Intent.CATEGORY_OPENABLE);intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);startActivityForResult(intent,PICK_COVER);break;
                 case 2:forgetCover(s);library();break;case 3:prefs.edit().putBoolean(key("fav",s),!favorite(s)).apply();library();break;
-                case 4:siteSettings(s);break;case 5:open(s,s);break;case 6:resetSiteSession(s);break;case 7:new AlertDialog.Builder(this).setTitle("Remover "+name(s)+"?").setMessage("A fonte, suas preferências e as obras associadas serão removidas.").setNegativeButton("Cancelar",null).setPositiveButton("Remover",(a,b)->remove(s)).show();break;case 8:extensionMenu(s);break;}
+                case 4:siteSettings(s);break;case 5:open(s,s);break;case 6:resetSiteSession(s);break;case 7:new AlertDialog.Builder(this).setTitle("Remover "+name(s)+"?").setMessage("A fonte só pode ser removida se não houver obras vinculadas.").setNegativeButton("Cancelar",null).setPositiveButton("Remover",(a,b)->remove(s)).show();break;case 8:extensionMenu(s);break;}
         }).show();
     }
     void forgetCover(String s){String u=prefs.getString(key("cover",s),"");prefs.edit().remove(key("cover",s)).apply();covers.invalidate(u);
@@ -538,7 +534,7 @@ public class Reader extends Activity {
             prefs.edit().putString(key("cover",s),u.toString()).apply();covers.invalidate(u.toString());library();}
         catch(Exception e){toast("Não foi possível salvar essa capa.");}}
     void remove(String s){
-        for(MangaLibrary.Work w:manga.forSource(s))replaceWorkCover(w,"");manga.removeSource(s);dirtyWorks(true);
+        if(!manga.forSource(s).isEmpty()){toast("Remova ou preserve suas obras antes de excluir a fonte.");return;}
         String old=prefs.getString(key("context",s),"");
         if(!old.isEmpty())engine.getStorageController().clearDataForSessionContext(old);
         readingPositions.removeSource(s);
@@ -565,10 +561,7 @@ public class Reader extends Activity {
         RadioGroup rotation=new RadioGroup(this);String[] orientations={"Automática (sistema)","Retrato","Paisagem","Bloquear posição atual"};
         for(int i=0;i<orientations.length;i++){RadioButton b=new RadioButton(this);b.setId(200+i);b.setText(orientations[i]);b.setButtonTintList(ColorStateList.valueOf(MINT));rotation.addView(b);if(i==prefs.getInt(key("rotation",s),0))rotation.check(200+i);}fill(box,rotation);
         space(box,18);fill(box,bold("Gestos e rolagem",16,WHITE));space(box,8);
-        Switch tap=new Switch(this);tap.setText("Dois toques na imagem: mostrar controles");tap.setChecked(prefs.getBoolean(key("doubleTap",s),false));fill(box,tap);
-        fill(box,text("Opcional; pode interferir no zoom por toque. O gesto Voltar continua disponível.",12,MUTED));space(box,10);
-        Switch next=new Switch(this);next.setText("Avançar capítulo ao fim da rolagem automática");next.setChecked(prefs.getBoolean(key("autoNext",s),false));fill(box,next);
-        fill(box,text("Somente quando há um link de capítulo reconhecido. Não avança durante a leitura manual.",12,MUTED));space(box,8);
+        fill(box,text("A rolagem automática para no final do capítulo. Use Voltar para mostrar os controles.",12,MUTED));space(box,8);
         SeekBar speed=new SeekBar(this);speed.setMax(27);speed.setProgress((scrollSpeed(s)-30)/10);
         TextView speedLabel=text("Velocidade: "+(30+speed.getProgress()*10)+" px/s",13,MUTED);fill(box,speedLabel);fill(box,speed);
         speed.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onProgressChanged(SeekBar b,int p,boolean user){speedLabel.setText("Velocidade: "+(30+p*10)+" px/s");}public void onStartTrackingTouch(SeekBar b){}public void onStopTrackingTouch(SeekBar b){}});
@@ -579,8 +572,8 @@ public class Reader extends Activity {
             boolean modeChanged=!mode(s).equals(values[selected]);
             prefs.edit().putString(key("mode",s),values[selected]).putBoolean(key("fullscreen",s),fs.isChecked())
                 .putBoolean(key("keepAwake",s),awake.isChecked()).putInt(key("brightness",s),system.isChecked()?-1:light.getProgress()+5)
-                .putInt(key("rotation",s),orientation).putBoolean(key("doubleTap",s),tap.isChecked())
-                .putBoolean(key("autoNext",s),next.isChecked()).putInt(key("scrollSpeed",s),30+speed.getProgress()*10).apply();
+                .putInt(key("rotation",s),orientation).remove(key("doubleTap",s))
+                .remove(key("autoNext",s)).putInt(key("scrollSpeed",s),30+speed.getProgress()*10).apply();
             if(session!=null&&!dashboard&&s.equals(source)){
                 applyReadingWindow(s);if(modeChanged){flushPosition();session.reload();}else sendReaderCommand("settings",readingConfig(s,pageUrl));
             }else library();
@@ -603,8 +596,8 @@ public class Reader extends Activity {
     }
     JSONObject readingConfig(String s,String url){
         JSONObject result=new JSONObject();try{
-            result.put("mode",mode(s));result.put("y",savedPosition(s,url));result.put("predecode",!covers.lowRam()&&prefs.getBoolean("predecode",true));
-            result.put("doubleTap",prefs.getBoolean(key("doubleTap",s),false));result.put("autoNext",prefs.getBoolean(key("autoNext",s),false));
+            result.put("mode",mode(s));result.put("y",savedPosition(s,url));result.put("predecode",false);
+            
             result.put("speed",scrollSpeed(s));result.put("adapter",adapterFor(s).json());
         }catch(Exception ignored){}return result;
     }
@@ -638,15 +631,10 @@ public class Reader extends Activity {
         fill(privacy,text("● HTTPS obrigatório e proteção contra sites perigosos\n● Cookies separados por fonte\n● Câmera, microfone e localização negados\n● Pop-ups automáticos e navegação para outros domínios bloqueados\n● Depuração remota desativada",14,MUTED));space(privacy,12);
         fill(privacy,text("Bloqueios de navegação nesta execução: "+blockedNavigation+" (não são contagem de anúncios do uBlock).",12,MUTED));
         space(privacy,8);fill(privacy,text("Para abrir outro domínio, adicione uma nova fonte. Para apagar a sessão de um site, use as opções da fonte.",13,MUTED));fill(shelfContent,privacy);space(shelfContent,16);
-        LinearLayout perf=col();pad(perf,16,16);perf.setBackground(border(PANEL,16,LINE));
-        fill(perf,bold("Desempenho",18,WHITE));space(perf,8);
-        Switch warm=new Switch(this);warm.setText("Preparar próxima imagem");warm.setChecked(!covers.lowRam()&&prefs.getBoolean("predecode",true));warm.setEnabled(!covers.lowRam());
-        warm.setOnCheckedChangeListener((v,on)->prefs.edit().putBoolean("predecode",on).apply());fill(perf,warm);
-        space(perf,6);fill(perf,text(covers.lowRam()?"Modo leve automático: preparação extra desativada neste aparelho.":"Prepara somente uma imagem próxima, já baixada, quando o leitor está ocioso. Não reduz a qualidade.",13,MUTED));
-        space(perf,8);fill(perf,text("Cache de capas: até "+(covers.limitBytes()/1048576)+" MiB. Imagens de capítulos continuam sob controle do Gecko.",12,MUTED));fill(shelfContent,perf);space(shelfContent,16);
+        fill(shelfContent,button("Downloads antigos",false,()->{tab=4;library();}));space(shelfContent,16);
         LinearLayout reading=col();pad(reading,16,16);reading.setBackground(border(PANEL,16,LINE));fill(reading,bold("Como usar",18,WHITE));space(reading,9);
-        fill(reading,text("• Voltar mostra os controles durante a tela cheia.\n• Use os controles inferiores para rolagem automática e capítulos reconhecidos.\n• Ajuste brilho, rotação e gestos nas preferências da fonte.\n• O Koma guarda as últimas posições por página.",14,MUTED));fill(shelfContent,reading);space(shelfContent,22);
-        fill(shelfContent,text("KOMA 7.1  ·  GeckoView 161  ·  ARM64",12,MUTED));
+        fill(reading,text("• Voltar mostra os controles durante a tela cheia.\n• Use os controles inferiores para rolagem automática e capítulos reconhecidos.\n• Ajuste brilho e rotação nas preferências da fonte.\n• O Koma guarda as últimas posições por página.",14,MUTED));fill(shelfContent,reading);space(shelfContent,22);
+        fill(shelfContent,text("KOMA 7.2  ·  GeckoView 161  ·  ARM64",12,MUTED));
     }
     void buildAppearance(){
         LinearLayout panel=col();pad(panel,16,16);panel.setBackground(border(PANEL,18,LINE));
@@ -661,7 +649,7 @@ public class Reader extends Activity {
         fill(shelfContent,panel);
     }
     void buildDownloads(){
-        heading(shelfContent,"Leitura offline","Capítulos disponíveis sem internet");
+        heading(shelfContent,"Downloads antigos","Acesso aos capítulos já salvos");
         final LinearLayout target=col();fill(shelfContent,target);fill(target,text("Consultando armazenamento…",14,MUTED));
         offlineWorker.execute(()->{List<OfflineStore.Entry> entries=offline.list();long bytes=offline.used();ui.post(()->{
             if(isDestroyed()||tab!=4||session!=null||target.getParent()!=shelfContent)return;
@@ -669,7 +657,7 @@ public class Reader extends Activity {
             fill(storage,bold("Armazenamento",17,WHITE));space(storage,7);
             fill(storage,text(String.format(Locale.getDefault(),"%.1f / 500 MiB • %d capítulos",bytes/1048576d,entries.size()),13,MUTED));
             ProgressBar capacity=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);capacity.setMax(500);capacity.setProgress((int)Math.min(500,bytes/1048576));capacity.setProgressTintList(ColorStateList.valueOf(MINT));storage.addView(capacity,new LinearLayout.LayoutParams(-1,dp(5)));fill(target,storage);space(target,16);
-            if(entries.isEmpty()){fill(target,text("Abra um capítulo de uma fonte autorizada e escolha Baixar capítulo para offline no menu. Imagens de outros domínios ou ainda não carregadas não são aceitas.",14,MUTED));return;}
+            if(entries.isEmpty()){fill(target,text("Nenhum download antigo encontrado. Novos downloads foram desativados nesta versão.",14,MUTED));return;}
             for(OfflineStore.Entry e:entries){LinearLayout item=col();pad(item,14,14);item.setBackground(border(PANEL,16,LINE));
                 TextView title=bold(e.title,16,WHITE);title.setMaxLines(2);fill(item,title);space(item,6);
                 fill(item,text(e.pages.size()+" imagens • "+String.format(Locale.getDefault(),"%.1f MiB",e.bytes/1048576d),12,MUTED));space(item,10);
@@ -678,60 +666,6 @@ public class Reader extends Activity {
                 LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(80),dp(48));p.leftMargin=dp(8);actions.addView(del,p);fill(item,actions);fill(target,item);space(target,10);
             }
         });});
-    }
-    void confirmDownload(){
-        if(!chapterDetected||!validPort(readerPort)){toast("Abra um capítulo reconhecido primeiro.");return;}
-        if(offlineToken!=null){toast("Já existe um download em andamento.");return;}
-        final String url=pageUrl;final GeckoSession expected=session;
-        new AlertDialog.Builder(this).setTitle("Baixar capítulo?")
-            .setMessage("Salve apenas conteúdo que você tem autorização para copiar. O capítulo precisa estar totalmente carregado, com imagens HTTPS do mesmo domínio. Limite: 100 MiB por capítulo. O download para se você sair da leitura.")
-            .setNegativeButton("Cancelar",null).setPositiveButton("Baixar",(d,i)->{if(session==expected&&Objects.equals(pageUrl,url)&&validPort(readerPort))startDownload();}).show();
-    }
-    void startDownload(){
-        pauseAuto();offlineToken=UUID.randomUUID().toString();offlineUrl=pageUrl;
-        downloadDialog=new ProgressDialog(this);downloadDialog.setTitle("Salvando capítulo");downloadDialog.setMessage("Conferindo imagens…");downloadDialog.setProgressStyle(ProgressDialog.STYLE_HORIZONTAL);downloadDialog.setMax(100);downloadDialog.setCancelable(false);
-        downloadDialog.setButton(DialogInterface.BUTTON_NEGATIVE,"Cancelar",(d,i)->cancelDownload("Download cancelado."));downloadDialog.show();
-        ui.postDelayed(offlineTimeout,45000);
-        try{sendReaderCommand("offlineStart",new JSONObject().put("token",offlineToken));}catch(Exception e){cancelDownload("Não foi possível iniciar.");}
-    }
-    void cancelDownload(String message){endDownload(message,false);}
-    void endDownload(String message,boolean keep){
-        String token=offlineToken;offlineToken=null;offlineUrl=null;ui.removeCallbacks(offlineTimeout);
-        if(token!=null&&readerPort!=null)try{readerPort.postMessage(new JSONObject().put("type","offlineCancel").put("url",pageUrl).put("token",token));}catch(Exception ignored){}
-        if(downloadDialog!=null){downloadDialog.dismiss();downloadDialog=null;}
-        if(token!=null&&!offlineWorker.isShutdown())offlineWorker.execute(()->{if(transfer!=null&&token.equals(transfer.id)){transfer.abort();transfer=null;}if(!keep)offline.delete(token);});
-        if(message!=null&&token!=null&&!isDestroyed())toast(message);
-    }
-    GeckoResult<Object> offlineMessage(JSONObject m){
-        String token=offlineToken,type=m.optString("type");if(token==null||!token.equals(m.optString("token"))||!Objects.equals(offlineUrl,pageUrl)||!foreground)return GeckoResult.fromValue((Object)false);
-        if(!Arrays.asList("offlineBegin","offlineChunk","offlineImage","offlineFinish","offlineAbort").contains(type))return GeckoResult.fromValue((Object)false);
-        if("offlineAbort".equals(type)){cancelDownload("Download incompleto. Confira se todas as imagens carregaram e pertencem à fonte.");return GeckoResult.fromValue((Object)false);}
-        String site=source,url=pageUrl;String title=MangaLibrary.clean(m.optString("title"),120,name(site));int count=m.optInt("count"),index=m.optInt("index",-1);
-        String data=m.optString("data");if(data.length()>65536){cancelDownload("Bloco de dados inválido.");return GeckoResult.fromValue((Object)false);}
-        GeckoResult<Object> reply=new GeckoResult<>();ui.removeCallbacks(offlineTimeout);ui.postDelayed(offlineTimeout,45000);
-        offlineWorker.execute(()->{
-            boolean ok=false,finished=false;int completed=0,total=0;
-            try{
-                if(!token.equals(offlineToken))throw new IllegalStateException();
-                if("offlineBegin".equals(type)){if(transfer!=null)throw new IllegalStateException();List<OfflineStore.Entry> existing=offline.list();if(existing.size()>=200)throw new IllegalStateException();for(OfflineStore.Entry e:existing)if(e.source.equals(site)&&e.url.equals(url))throw new IllegalStateException();transfer=offline.new Transfer(token,site,url,title,count);}
-                else{
-                    if(transfer==null||!token.equals(transfer.id))throw new IllegalStateException();
-                    if("offlineChunk".equals(type))transfer.chunk(index,data);
-                    else if("offlineImage".equals(type))transfer.end(index);
-                    else if("offlineFinish".equals(type)){transfer.finish();finished=true;}
-                }
-                completed=transfer.index;total=transfer.expected;ok=true;if(finished)transfer=null;
-            }catch(Exception e){if(transfer!=null&&token.equals(transfer.id)){transfer.abort();transfer=null;}}
-            final boolean success=ok,done=finished;final int n=completed,max=total;
-            ui.post(()->{
-                boolean current=token.equals(offlineToken)&&Objects.equals(url,offlineUrl)&&!isDestroyed();
-                if(current&&success&&downloadDialog!=null&&!"offlineChunk".equals(type)){downloadDialog.setMax(Math.max(1,max));downloadDialog.setProgress(n);downloadDialog.setMessage("Imagens salvas: "+n+" / "+max);}
-                if(current&&done){endDownload(null,true);toast("Capítulo disponível na aba Offline.");}
-                else if(current&&!success)cancelDownload("Não foi possível salvar. Verifique se já baixou este capítulo, o formato, tamanho e espaço livre.");
-                // Cancellation cleanup is queued by endDownload.
-                reply.complete((Object)(current&&success));
-            });
-        });return reply;
     }
     void toast(String s){Toast.makeText(this,s,Toast.LENGTH_SHORT).show();}
     void openDashboard(){
@@ -764,15 +698,14 @@ public class Reader extends Activity {
         browser=new GeckoView(this);browser.setBackgroundColor(Color.BLACK);
         if(isDashboard){fill(root,bar);root.addView(browser,new LinearLayout.LayoutParams(-1,0,1));}
         else{
-            FrameLayout frame=new FrameLayout(this);root.addView(frame,new LinearLayout.LayoutParams(-1,0,1));
-            frame.addView(browser,new FrameLayout.LayoutParams(-1,-1));
-            frame.addView(bar,new FrameLayout.LayoutParams(-1,-2,Gravity.TOP));
+            fill(root,bar);
+            root.addView(browser,new LinearLayout.LayoutParams(-1,0,1));
             readingTools=col();pad(readingTools,10,9);readingTools.setBackgroundColor(PANEL);
-            LinearLayout info=row();readingPercent=text("Progresso da página: —",12,MUTED);weighted(info,readingPercent,-2);
+            LinearLayout info=row();readingPercent=text("Posição na página: —",12,MUTED);weighted(info,readingPercent,-2);
             info.addView(button("Ajustes",false,()->siteSettings(source)));fill(readingTools,info);space(readingTools,6);
             LinearLayout controls=row();previousButton=button("‹ Anterior",false,()->navigateChapter(previousChapter));autoButton=button("▶ Auto",true,this::toggleAuto);nextButton=button("Próximo ›",false,()->navigateChapter(nextChapter));
             for(TextView b:new TextView[]{previousButton,autoButton,nextButton}){LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,dp(48),1);if(b!=previousButton)p.leftMargin=dp(6);controls.addView(b,p);}
-            fill(readingTools,controls);frame.addView(readingTools,new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM));
+            fill(readingTools,controls);fill(root,readingTools);
         }
         GeckoSessionSettings settings=new GeckoSessionSettings.Builder().contextId(isDashboard?"koma-ublock-panel":contextFor(s)).build();
         session=new GeckoSession(settings);
@@ -792,7 +725,7 @@ public class Reader extends Activity {
                     if(activeWork!=null&&Objects.equals(authorizedWorkUrl,pageUrl)&&(Objects.equals(loc,nextChapter)||Objects.equals(loc,previousChapter)))authorizedWorkUrl=loc;
                     flushPosition();saveWorks();positionSource=null;positionUrl=null;
                     if(!SecurityPolicy.sameDocument(loc,pageUrl)){clearReaderPort();resetChapterControls();updateChapterControls();}
-                    else {cancelDownload(null);clearExtraction();if(Objects.equals(authorizedWorkUrl,pageUrl))authorizedWorkUrl=loc;}
+                    else {clearExtraction();if(Objects.equals(authorizedWorkUrl,pageUrl))authorizedWorkUrl=loc;}
                 }
                 pageUrl=loc;if(!dashboard){String domain=host(loc);if(!TextUtils.equals(readerHost.getText(),domain))readerHost.setText(domain);if(sameSite(loc)){record(source,loc);}}}
             @Override public GeckoResult<AllowOrDeny> onLoadRequest(GeckoSession gs,LoadRequest r){
@@ -822,11 +755,8 @@ public class Reader extends Activity {
                 if(!"koma".equals(app)||sender.session!=session||!sender.isTopLevel()||dashboard||source==null||!(message instanceof JSONObject))return null;
                 JSONObject m=(JSONObject)message;String u=m.optString("url");
                 if(!sameSite(u)||!SecurityPolicy.sameDocument(u,sender.url)||!u.equals(pageUrl)||u.length()>4096)return null;
-                if(m.optString("type").startsWith("offline"))return offlineMessage(m);
+                
                 if("init".equals(m.optString("type")))return GeckoResult.fromValue((Object)readingConfig(source,u));
-                if("toggleControls".equals(m.optString("type"))&&prefs.getBoolean(key("doubleTap",source),false)&&chapterDetected){
-                    ui.post(()->{if(sender.session==session&&u.equals(pageUrl)&&!dashboard){pauseAuto();setFull(!full);}});return null;
-                }
                 if("position".equals(m.optString("type"))&&u.equals(pageUrl)){int y=PerfPolicy.clampPosition(m.optInt("y",0));queuePosition(source,u,y,m.optBoolean("flush",false));}
                 return null;}
             @Override public void onConnect(WebExtension.Port port){
@@ -834,7 +764,7 @@ public class Reader extends Activity {
                 clearReaderPort();readerPort=port;
                 port.setDelegate(new WebExtension.PortDelegate(){
                     @Override public void onPortMessage(Object message,WebExtension.Port p){handleReaderPort(message,p);}
-                    @Override public void onDisconnect(WebExtension.Port p){if(readerPort==p){readerPort=null;cancelDownload(null);resetChapterControls();updateChapterControls();}}
+                    @Override public void onDisconnect(WebExtension.Port p){if(readerPort==p){readerPort=null;resetChapterControls();updateChapterControls();}}
                 });
                 sendReaderCommand("status",null);
             }
@@ -848,7 +778,7 @@ public class Reader extends Activity {
             &&SecurityPolicy.sameDocument(pageUrl,p.sender.url)&&sameSite(p.sender.url);
     }
     void clearReaderPort(){
-        clearExtraction();cancelDownload(null);
+        clearExtraction();
         WebExtension.Port old=readerPort;readerPort=null;autoRunning=false;
         if(old!=null){try{old.disconnect();}catch(RuntimeException ignored){}}
     }
@@ -858,7 +788,7 @@ public class Reader extends Activity {
         if(previousButton!=null){previousButton.setEnabled(previousChapter!=null);previousButton.setAlpha(previousChapter==null?.45f:1f);}
         if(nextButton!=null){nextButton.setEnabled(nextChapter!=null);nextButton.setAlpha(nextChapter==null?.45f:1f);}
         if(autoButton!=null){boolean enabled=readerPort!=null&&chapterDetected;autoButton.setEnabled(enabled);autoButton.setAlpha(enabled?1f:.45f);String label=autoRunning?"Ⅱ Pausar":"▶ Auto";if(!TextUtils.equals(autoButton.getText(),label))autoButton.setText(label);}
-        if(readingPercent!=null){String label=chapterDetected?"Página: "+readingProgress+"%":"Capítulo não reconhecido";if(!TextUtils.equals(readingPercent.getText(),label))readingPercent.setText(label);}
+        if(readingPercent!=null){String label=chapterDetected?"Posição: "+readingProgress+"%":"Navegação manual";if(!TextUtils.equals(readingPercent.getText(),label))readingPercent.setText(label);}
     }
     void sendReaderCommand(String type,JSONObject data){
         WebExtension.Port p=readerPort;if(!validPort(p))return;
@@ -881,9 +811,6 @@ public class Reader extends Activity {
                 if(w!=null&&!label.isEmpty()&&!label.equals(w.chapter)){w.chapter=label;changed=true;}
                 if(changed)dirtyWorks(false);
             }
-        }else if("autoEnd".equals(type)&&chapterDetected&&autoRunning&&foreground&&prefs.getBoolean(key("autoNext",source),false)){
-            String destination=ReadingPolicy.chapterLink(source,pageUrl,m.optString("next"));
-            if(destination!=null&&destination.equals(nextChapter))navigateChapter(destination);
         }
     }
     void navigateChapter(String target){
@@ -901,8 +828,21 @@ public class Reader extends Activity {
     }
     void readerMenu(){
         pauseAuto();if(dashboard){new AlertDialog.Builder(this).setTitle("uBlock Origin").setItems(new String[]{"Recarregar painel","Voltar aos ajustes"},(d,i)->{if(i==0)session.reload();else closeReader();}).show();return;}
-        new AlertDialog.Builder(this).setTitle(name(source)).setItems(new String[]{"Página inicial","Configurar leitura","Copiar endereço","Painel do uBlock","Limpar cookies e sessão","Voltar à estante","Salvar na biblioteca","Atualizar capítulo da obra","Explorar catálogo","Listar capítulos","Salvar obra detectada","Configurar extensão","Baixar capítulo para offline"},(d,i)->{
-            switch(i){case 0:activeWork=null;authorizedWorkUrl=null;readerTitle.setText(name(source));session.loadUri(source);break;case 1:siteSettings(source);break;case 2:((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("Página",pageUrl));toast("Endereço copiado.");break;case 3:openDashboard();break;case 4:resetSiteSession(source);break;case 5:closeReader();break;case 6:editWork(null,source,pageUrl);break;case 7:editActiveProgress();break;case 8:requestExtraction("catalog");break;case 9:requestExtraction("chapters");break;case 10:requestExtraction("work");break;case 11:extensionMenu(source);break;case 12:confirmDownload();break;}}).show();
+        ArrayList<String> labels=new ArrayList<>();ArrayList<Runnable> actions=new ArrayList<>();
+        labels.add("Salvar obra");actions.add(()->{if(validPort(readerPort))requestExtraction("work");else editWork(null,source,pageUrl);});
+        if(!manga.forSource(source).isEmpty()){labels.add("Registrar capítulo em obra");actions.add(this::editActiveProgress);}
+        AdapterProfile p=adapterFor(source);
+        if(validPort(readerPort)&&!p.value("chapters").isEmpty()){labels.add("Lista de capítulos");actions.add(()->requestExtraction("chapters"));}
+        if(validPort(readerPort)&&!p.value("catalog").isEmpty()){labels.add("Catálogo");actions.add(()->requestExtraction("catalog"));}
+        labels.add("Página inicial da fonte");actions.add(()->{activeWork=null;authorizedWorkUrl=null;readerTitle.setText(name(source));session.loadUri(source);});
+        labels.add("Copiar endereço");actions.add(()->{((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("Página",pageUrl));toast("Endereço copiado.");});
+        labels.add("Opções da fonte");actions.add(()->readerSourceOptions(source));
+        new AlertDialog.Builder(this).setTitle("Leitura").setItems(labels.toArray(new String[0]),(d,i)->{if(session!=null)actions.get(i).run();}).show();
+    }
+    void readerSourceOptions(String site){
+        new AlertDialog.Builder(this).setTitle(name(site)).setItems(new String[]{"Configurar leitura","Perfil da fonte (avançado)","Painel do uBlock","Limpar sessão"},(d,i)->{
+            if(i==0)siteSettings(site);else if(i==1)extensionMenu(site);else if(i==2)openDashboard();else resetSiteSession(site);
+        }).show();
     }
     AdapterProfile adapterFor(String site){
         try{return AdapterProfile.parse(prefs.getString(key("adapter",site),"{}"));}
@@ -920,7 +860,7 @@ public class Reader extends Activity {
         new AlertDialog.Builder(this).setTitle("Extensão • "+name(site))
           .setItems(new String[]{"Perfil atual: "+current.name(),"Escolher modelo","Editar seletores","Importar configuração JSON","Copiar configuração JSON","Restaurar padrão"},(d,i)->{
             switch(i){case 0:new AlertDialog.Builder(this).setTitle(current.name()).setMessage("Os perfis interpretam apenas elementos da página atual. Não executam scripts importados. Para testar, abra uma página e use Explorar catálogo ou Listar capítulos.").setPositiveButton("OK",null).show();break;
-            case 1:new AlertDialog.Builder(this).setTitle("Escolher modelo").setItems(new String[]{"Genérico (padrão)","Madara (WordPress)","MangaReader (modelo comum)"},(a,b)->adapterEditor(site,AdapterProfile.preset(b))).show();break;
+            case 1:new AlertDialog.Builder(this).setTitle("Escolher modelo").setItems(new String[]{"Genérico (padrão)","Madara (WordPress)","MangaReader (modelo comum)"},(a,b)->new AlertDialog.Builder(this).setTitle("Aplicar perfil?").setMessage("O perfil é um modelo inicial. Você pode editar os seletores depois.").setNegativeButton("Cancelar",null).setPositiveButton("Aplicar",(x,y)->saveAdapter(site,AdapterProfile.preset(b))).show()).show();break;
             case 2:adapterEditor(site,current);break;
             case 3:importAdapter(site);break;
             case 4:((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("Koma extensão",current.json().toString()));toast("Configuração copiada.");break;
@@ -1021,9 +961,9 @@ public class Reader extends Activity {
         root.setFitsSystemWindows(!v);root.requestApplyInsets();immersive();}
     void release(){pauseAuto();flushPosition();positionSource=null;positionUrl=null;clearReaderPort();if(session!=null){GeckoSession old=session;session=null;browser.releaseSession();old.close();browser=null;}readingTools=null;autoButton=null;previousButton=null;nextButton=null;readingPercent=null;resetReadingWindow();}
     void closeReader(){release();saveWorks();activeWork=null;authorizedWorkUrl=null;source=null;pageUrl=null;library();}
-    @Override public void onBackPressed(){if(session==null){if(tab!=0){tab=0;library();}else super.onBackPressed();}else if(full){pauseAuto();setFull(false);}else if(canBack){pauseAuto();session.goBack();}else closeReader();}
+    @Override public void onBackPressed(){if(session==null){if(tab!=3){tab=3;library();}else super.onBackPressed();}else if(full){pauseAuto();setFull(false);}else if(canBack){pauseAuto();session.goBack();}else closeReader();}
     @Override public void onWindowFocusChanged(boolean focus){super.onWindowFocusChanged(focus);if(focus&&full)immersive();}
-    @Override protected void onPause(){foreground=false;cancelDownload(null);pauseAuto();flushPosition();saveWorks();if(session!=null)session.setActive(false);super.onPause();}
+    @Override protected void onPause(){foreground=false;pauseAuto();flushPosition();saveWorks();if(session!=null)session.setActive(false);super.onPause();}
     @Override protected void onResume(){super.onResume();foreground=true;if(session!=null)session.setActive(true);}
     @Override public void onTrimMemory(int level){super.onTrimMemory(level);if(covers!=null)covers.trim(level);}
     @Override public void onLowMemory(){super.onLowMemory();if(covers!=null)covers.clear();}

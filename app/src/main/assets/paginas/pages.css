@@ -12,8 +12,6 @@
 }
 
 /* Opt-in only on non-interactive chapter images; preserve normal touch elsewhere. */
-:root.koma-doubletap :where(.reading-content .page-break,#readerarea,.wp-manga-chapter-img-wrap) img:not([usemap]):not(a img):not(button img) { touch-action: manipulation; }
 
 :root.koma-fit img.koma-adapter-image,:root.koma-continuous img.koma-adapter-image {display:block !important;max-width:100% !important;height:auto !important;margin-inline:auto !important;}
 :root.koma-continuous img.koma-adapter-image {margin-block:0 !important;}
-:root.koma-doubletap img.koma-adapter-image:not(a img):not(button img){touch-action:manipulation;}
