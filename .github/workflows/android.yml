@@ -29,7 +29,7 @@ jobs:
           yes | "$manager" --sdk_root="$sdk" --licenses
           set -o pipefail
           # Google now publishes major.minor platform names.
-          "$manager" --sdk_root="$sdk" --install "platforms;android-37.0" "build-tools;37.0.0" "platform-tools"
+          "$manager" --sdk_root="$sdk" --install "platforms;android-37.2" "build-tools;37.0.0" "platform-tools"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.4.1'

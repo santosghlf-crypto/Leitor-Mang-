@@ -7,7 +7,7 @@
 - Câmera, microfone, localização, notificações e demais permissões solicitadas ao delegado são negadas. Algumas funções de login e mídia podem não funcionar.
 - A ponte nativa valida aplicativo, sessão, frame superior, endereço atual e fonte; apenas inicialização e posição são tratados. Não recebe instruções de execução genérica.
 - Os números locais de navegação bloqueada não são estatísticas de publicidade. Para filtros e estatísticas reais, use o painel do uBlock. Nenhum bloqueio é infalível.
-- Branch experimental com GeckoView 161.0.20261118180411 e SDK 37.0; só promover após compilação e testes. Mantém minSdk 26 e targetSdk 35 no projeto; verificar compatibilidade efetiva no APK.
+- Branch experimental com GeckoView 161.0.20261118180411 e SDK 37.2; só promover após compilação e testes. Mantém minSdk 26 e targetSdk 35 no projeto; verificar compatibilidade efetiva no APK.
 - APK de teste: assinatura debug, não distribuição final. Para atualizações estáveis, crie chave de assinatura sob controle do proprietário e configure segredos protegidos. Não publique chaves no repositório.
 ## Teste no Android
 1. Adicione duas fontes e confira se o login de uma não aparece na outra. Limpe a sessão de uma e confira a outra.
