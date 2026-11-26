@@ -152,11 +152,11 @@
     stopAuto(false);if(restoring)stopRestore();tracker.activate();
     configNow.speed=clampSpeed(speed);auto=true;publish(true);raf=requestAnimationFrame(autoFrame);
   }
-  let offlineBusy=false;
+  let offlineBusy=false,offlineAbortController=null,offlineRequestToken=null;
   async function saveOffline(token){
     if(offlineBusy||!hasChapter()||!port)return;
     offlineBusy=true;const current=location.href,connection=port;
-    const abort=new AbortController();
+    const abort=new AbortController();offlineAbortController=abort;offlineRequestToken=token;
     const ack=async(type,extra={})=>{
       if(finished||document.hidden||location.href!==current||port!==connection)throw Error("cancelled");
       if(await send({type,url:current,token,...extra})!==true)throw Error("not accepted");
@@ -185,19 +185,20 @@
       }
       await ack("offlineFinish");
     }catch(e){abort.abort();try{await send({type:"offlineAbort",url:current,token});}catch(ignored){}}
-    finally{offlineBusy=false;}
+    finally{offlineBusy=false;offlineAbortController=null;offlineRequestToken=null;}
   }
   function connectReader(){
     if(port||!configNow||finished)return;
     try{
       const connection=browser.runtime.connectNative("koma");port=connection;lastStatus="";
-      connection.onDisconnect.addListener(()=>{if(port===connection){port=null;stopAuto(false);}});
+      connection.onDisconnect.addListener(()=>{if(port===connection){offlineAbortController?.abort();port=null;stopAuto(false);}});
       connection.onMessage.addListener(m=>{
         if(port!==connection||!m||m.url!==location.href||finished)return;
         if(m.type==="start")startAuto(m.speed);
         else if(m.type==="stop")stopAuto();
         else if(m.type==="status")publish(true);
         else if(m.type==="offlineStart"&&typeof m.token==="string"&&m.token.length===36)saveOffline(m.token);
+        else if(m.type==="offlineCancel"&&m.token===offlineRequestToken)offlineAbortController?.abort();
         else if(m.type==="extract"&&["work","catalog","chapters"].includes(m.kind)&&typeof m.request==="string"&&m.request.length<=64){post("extraction",{request:m.request,kind:m.kind,...KomaAdapter.extract(document,activeAdapter,m.kind,location.href)});}
         else if(m.type==="settings"){
           stopAuto();configNow.doubleTap=m.doubleTap===true;configNow.autoNext=m.autoNext===true;configNow.speed=clampSpeed(m.speed);
@@ -209,7 +210,7 @@
   }
   function disconnectReader(){
     if(statusTimer!==null)clearTimeout(statusTimer);statusTimer=null;stopAuto(false);
-    const p=port;port=null;if(p)try{p.disconnect();}catch(e){}
+    offlineAbortController?.abort();const p=port;port=null;if(p)try{p.disconnect();}catch(e){}
   }
   function interactive(target){return !(target instanceof Element)||!!target.closest("a,button,input,textarea,select,label,[contenteditable],[role=button]");}
   document.addEventListener("pointerdown",event=>{

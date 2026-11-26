@@ -12,7 +12,7 @@ public class OfflineActivity extends Activity{
     OfflineStore store;OfflineStore.Entry entry;
     final Handler main=new Handler(Looper.getMainLooper());
     final ThreadPoolExecutor worker=new ThreadPoolExecutor(1,1,15,TimeUnit.SECONDS,new ArrayBlockingQueue<>(12));
-    ListView list;LinearLayout root,bar;TextView label;boolean full=true,closed;int width;
+    ListView list;LinearLayout root,bar;TextView label;boolean full=true,closed;int width;boolean initial=true;
     static final int TILE=768;
     final ArrayList<Tile> tiles=new ArrayList<>();
     static final class Tile{int page,sample,top,bottom,w,h;Tile(int p,int s,int t,int b,int w,int h){page=p;sample=s;top=t;bottom=b;this.w=w;this.h=h;}}
@@ -31,18 +31,20 @@ public class OfflineActivity extends Activity{
     }
     void rebuild(){
         if(entry==null)return;int now=list.getWidth();if(now<=0)now=getResources().getDisplayMetrics().widthPixels;
-        int first=list.getFirstVisiblePosition();width=now;tiles.clear();
+        int first=list.getFirstVisiblePosition();int page=tiles.isEmpty()?0:tiles.get(Math.min(first,tiles.size()-1)).page;int offset=tiles.isEmpty()?0:tiles.get(Math.min(first,tiles.size()-1)).top;
+        if(initial){page=getSharedPreferences("offlinePositions",MODE_PRIVATE).getInt(entry.id+"/page",0);offset=getSharedPreferences("offlinePositions",MODE_PRIVATE).getInt(entry.id+"/offset",0);initial=false;}
+        width=now;tiles.clear();
         for(int i=0;i<entry.pages.size();i++){OfflineStore.Page p=entry.pages.get(i);int sample=OfflinePolicy.sample(p.w,width);
-            int segment=TILE*sample;for(int top=0;top<p.h;top+=segment){int bottom=Math.min(p.h,top+segment);tiles.add(new Tile(i,sample,top,bottom,p.w,Math.max(1,(int)Math.round((double)(bottom-top)*width/p.w))));}}
+            int segment=TILE*sample;for(int top=0;top<p.h;top+=segment){int bottom=Math.min(p.h,top+segment);tiles.add(new Tile(i,sample,top,bottom,p.w,Math.max(1,(int)Math.round((double)(bottom-top)*Math.min(width,p.w*2)/p.w))));}}
         list.setAdapter(new BaseAdapter(){
             public int getCount(){return tiles.size();}public Object getItem(int i){return tiles.get(i);}public long getItemId(int i){return i;}
             public View getView(int i,View old,android.view.ViewGroup parent){Region v=old instanceof Region?(Region)old:new Region();v.bind(tiles.get(i));return v;}
         });
-        list.setSelection(Math.min(first,Math.max(0,tiles.size()-1)));
+        int selection=0;for(int i=0;i<tiles.size();i++){Tile t=tiles.get(i);if(t.page<page||(t.page==page&&t.top<=offset))selection=i;else break;}list.setSelection(selection);
     }
     final class Region extends ImageView{
         Tile tile;Future<?> future;int generation;
-        Region(){super(OfflineActivity.this);setScaleType(ScaleType.FIT_XY);setBackgroundColor(Color.BLACK);}
+        Region(){super(OfflineActivity.this);setScaleType(ScaleType.FIT_CENTER);setBackgroundColor(Color.BLACK);}
         void cancel(){generation++;if(future!=null){future.cancel(true);if(future instanceof Runnable)worker.remove((Runnable)future);future=null;}}
         void bind(Tile t){cancel();tile=t;setImageDrawable(null);setLayoutParams(new AbsListView.LayoutParams(-1,t.h));if(isAttachedToWindow())load();}
         @Override protected void onAttachedToWindow(){super.onAttachedToWindow();if(tile!=null)load();}
@@ -61,5 +63,6 @@ public class OfflineActivity extends Activity{
     void immersive(boolean on){full=on;bar.setVisibility(on?View.GONE:View.VISIBLE);getWindow().getDecorView().setSystemUiVisibility(on?5894:0);}
     @Override public void onBackPressed(){if(full)immersive(false);else finish();}
     @Override public void onConfigurationChanged(android.content.res.Configuration c){super.onConfigurationChanged(c);list.post(()->{if(!closed)rebuild();});}
+    @Override protected void onPause(){if(entry!=null&&!tiles.isEmpty()){Tile t=tiles.get(Math.min(list.getFirstVisiblePosition(),tiles.size()-1));getSharedPreferences("offlinePositions",MODE_PRIVATE).edit().putInt(entry.id+"/page",t.page).putInt(entry.id+"/offset",t.top).apply();}super.onPause();}
     @Override protected void onDestroy(){closed=true;worker.shutdownNow();super.onDestroy();}
 }

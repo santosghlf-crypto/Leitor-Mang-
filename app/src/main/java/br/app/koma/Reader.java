@@ -32,7 +32,7 @@ public class Reader extends Activity {
     OfflineStore offline;
     final ExecutorService offlineWorker=Executors.newSingleThreadExecutor();
     OfflineStore.Transfer transfer; // worker-only
-    String offlineToken,offlineUrl;
+    volatile String offlineToken;String offlineUrl;
     ProgressDialog downloadDialog;
     final Runnable offlineTimeout=()->cancelDownload("Download interrompido: a fonte não respondeu.");
     int themeChoice=0;
@@ -674,7 +674,7 @@ public class Reader extends Activity {
                 TextView title=bold(e.title,16,WHITE);title.setMaxLines(2);fill(item,title);space(item,6);
                 fill(item,text(e.pages.size()+" imagens • "+String.format(Locale.getDefault(),"%.1f MiB",e.bytes/1048576d),12,MUTED));space(item,10);
                 LinearLayout actions=row();weighted(actions,button("Ler offline",true,()->startActivity(new Intent(this,OfflineActivity.class).putExtra("id",e.id))),dp(48));
-                TextView del=button("Excluir",false,()->new AlertDialog.Builder(this).setTitle("Excluir download?").setMessage("A obra na biblioteca permanece salva.").setNegativeButton("Cancelar",null).setPositiveButton("Excluir",(d,i)->offlineWorker.execute(()->{offline.delete(e.id);ui.post(()->{if(!isDestroyed()&&tab==4&&session==null)library();});})).show());
+                TextView del=button("Excluir",false,()->new AlertDialog.Builder(this).setTitle("Excluir download?").setMessage("A obra na biblioteca permanece salva.").setNegativeButton("Cancelar",null).setPositiveButton("Excluir",(d,i)->offlineWorker.execute(()->{offline.delete(e.id);getSharedPreferences("offlinePositions",MODE_PRIVATE).edit().remove(e.id+"/page").remove(e.id+"/offset").apply();ui.post(()->{if(!isDestroyed()&&tab==4&&session==null)library();});})).show());
                 LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(80),dp(48));p.leftMargin=dp(8);actions.addView(del,p);fill(item,actions);fill(target,item);space(target,10);
             }
         });});
@@ -696,6 +696,7 @@ public class Reader extends Activity {
     }
     void cancelDownload(String message){
         String token=offlineToken;offlineToken=null;offlineUrl=null;ui.removeCallbacks(offlineTimeout);
+        if(token!=null&&readerPort!=null)try{readerPort.postMessage(new JSONObject().put("type","offlineCancel").put("url",pageUrl).put("token",token));}catch(Exception ignored){}
         if(downloadDialog!=null){downloadDialog.dismiss();downloadDialog=null;}
         if(token!=null&&!offlineWorker.isShutdown())offlineWorker.execute(()->{if(transfer!=null&&token.equals(transfer.id)){transfer.abort();transfer=null;}});
         if(message!=null&&token!=null&&!isDestroyed())toast(message);
@@ -710,6 +711,7 @@ public class Reader extends Activity {
         offlineWorker.execute(()->{
             boolean ok=false,finished=false;int completed=0,total=0;
             try{
+                if(!token.equals(offlineToken))throw new IllegalStateException();
                 if("offlineBegin".equals(type)){if(transfer!=null)throw new IllegalStateException();if(offline.list().size()>=200)throw new IllegalStateException();transfer=offline.new Transfer(token,site,url,title,count);}
                 else{
                     if(transfer==null||!token.equals(transfer.id))throw new IllegalStateException();
