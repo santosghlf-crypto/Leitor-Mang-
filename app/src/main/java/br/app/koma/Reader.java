@@ -7,6 +7,12 @@ import android.graphics.*;
 import android.graphics.drawable.*;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
+import android.content.res.Configuration;
+import java.lang.ref.WeakReference;
+import java.util.concurrent.Future;
 import android.text.*;
 import android.text.InputType;
 import android.view.*;
@@ -35,13 +41,24 @@ public class Reader extends Activity {
     String source, pending, pageUrl, pickSite, query="";
     int tab=0;
     boolean ready, failed, full, canBack, dashboard, favoritesOnly;
-    final Map<String, Bitmap> covers = new HashMap<>();
+    final Handler ui = new Handler(Looper.getMainLooper());
+    CoverLoader covers;
+    ListView shelfList;
+    ShelfAdapter shelfAdapter;
+    LinearLayout shelfSummary;
+    Runnable searchRefresh;
+    String positionSource, positionUrl, lastRecordedUrl;
+    int positionY;
+    boolean positionDirty, positionScheduled, foreground;
+    long pageStartedAt;
+    final Runnable positionFlush = this::flushPosition;
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
         getWindow().setStatusBarColor(BG); getWindow().setNavigationBarColor(BG);
         prefs=getSharedPreferences("shelf", MODE_PRIVATE);
         sites=array("sites"); history=array("history");
+        covers=new CoverLoader(getApplicationContext());
         if(saved!=null){pending=saved.getString("source");pickSite=saved.getString("pickSite");}
         engine=GeckoRuntime.getDefault(this);
         prepare();
@@ -77,7 +94,12 @@ public class Reader extends Activity {
         t.setClickable(true);t.setFocusable(true);t.setOnClickListener(v->run.run());return t;
     }
     void line(LinearLayout l){View v=new View(this);v.setBackgroundColor(LINE);l.addView(v,new LinearLayout.LayoutParams(-1,dp(1)));}
-    void root(boolean reading){root=col();root.setBackgroundColor(reading?Color.BLACK:BG);root.setFitsSystemWindows(!full);setContentView(root);}
+    void root(boolean reading){
+        if(searchRefresh!=null){ui.removeCallbacks(searchRefresh);searchRefresh=null;}
+        shelfList=null;shelfAdapter=null;shelfSummary=null;search=null;
+        root=col();root.setBackgroundColor(reading?Color.BLACK:BG);
+        root.setFitsSystemWindows(!full);setContentView(root);
+    }
     String host(String s){try{return URI.create(s).getHost();}catch(Exception e){return "";}}
     String key(String k,String s){return k+"/"+s;}
     String name(String s){String h=host(s);return prefs.getString(key("name",s),h==null?s:h.replaceFirst("^www\\.",""));}
@@ -103,9 +125,20 @@ public class Reader extends Activity {
         TextView protection=bold(ready?"● Protegido":failed?"● Erro":"● Iniciando",11,ready?MINT:WARN);
         pad(protection,10,9);protection.setBackground(bg(PANEL,20));protection.setOnClickListener(v->{tab=2;library();});
         header.addView(protection);fill(root,header);
-        ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);scroll.setClipToPadding(false);
-        root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));shelfContent=col();pad(shelfContent,20,9);scroll.addView(shelfContent);
-        if(tab==0)buildShelf();else if(tab==1)buildHistory();else buildSettings();
+        shelfContent=col();pad(shelfContent,20,9);
+        if(tab==0){
+            shelfList=new ListView(this);shelfList.setDivider(null);shelfList.setDividerHeight(0);
+            shelfList.setSelector(new ColorDrawable(Color.TRANSPARENT));shelfList.setCacheColorHint(Color.TRANSPARENT);
+            shelfList.setItemsCanFocus(true);shelfList.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
+            shelfList.setClipToPadding(false);shelfList.setVerticalScrollBarEnabled(false);
+            root.addView(shelfList,new LinearLayout.LayoutParams(-1,0,1));
+            shelfList.addHeaderView(shelfContent,null,false);
+            buildShelf();
+        }else{
+            ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);scroll.setClipToPadding(false);
+            root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));scroll.addView(shelfContent);
+            if(tab==1)buildHistory();else buildSettings();
+        }
         line(root);bottom=row();pad(bottom,12,7);
         String[] icons={"▦","◷","⚙"}, labels={"Estante","Histórico","Ajustes"};
         for(int i=0;i<3;i++){final int index=i;TextView b=bold(icons[i]+"\n"+labels[i],13,tab==i?MINT:MUTED);b.setGravity(Gravity.CENTER);b.setMinHeight(dp(53));b.setBackground(bg(tab==i?PANEL:BG,12));b.setOnClickListener(v->{tab=index;query="";library();});weighted(bottom,b,-2);}
@@ -115,79 +148,147 @@ public class Reader extends Activity {
     void heading(LinearLayout l,String top,String sub){
         fill(l,bold(top,29,WHITE));space(l,7);fill(l,text(sub,14,MUTED));space(l,19);
     }
+    int shelfColumns(){return getResources().getDisplayMetrics().widthPixels/dp(1)>=650?3:2;}
     void buildShelf(){
         heading(shelfContent,"Minha estante",sites.length()==0?"Comece a montar sua coleção.":sites.length()+" fontes na sua coleção");
         fill(shelfContent,button("+  Adicionar fonte",true,()->editSite(null)));space(shelfContent,18);
         search=new EditText(this);search.setSingleLine();search.setTextSize(14);search.setTextColor(WHITE);search.setHintTextColor(MUTED);
-        search.setHint("Buscar na estante");search.setText(query);search.setBackground(border(PANEL,13,LINE));pad(search,15,12);fill(shelfContent,search);space(shelfContent,12);
-        filters=row();fill(shelfContent,filters);
-        LinearLayout grid=col();space(shelfContent,15);fill(shelfContent,grid);
-        Runnable refresh=()->{filters.removeAllViews();for(int i=0;i<2;i++){final boolean f=i==1;TextView chip=button(f?"★  Favoritos":"Todas as fontes",favoritesOnly==f,()->{favoritesOnly=f;renderGrid(grid);renderFilter(grid);});
-                LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,dp(42),1);if(i==1)p.leftMargin=dp(8);filters.addView(chip,p);}
-            renderGrid(grid);};
-        refresh.run();
-        search.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int a,int c,int z){}public void onTextChanged(CharSequence s,int a,int b,int c){query=s.toString();renderGrid(grid);}public void afterTextChanged(Editable e){}});
-        search.clearFocus();shelfContent.setFocusableInTouchMode(true);shelfContent.requestFocus();
+        search.setHint("Buscar na estante");search.setText(query);search.setBackground(border(PANEL,13,LINE));pad(search,15,12);
+        fill(shelfContent,search);space(shelfContent,12);filters=row();fill(shelfContent,filters);
+        for(int i=0;i<2;i++){
+            final boolean f=i==1;TextView chip=button(f?"★  Favoritos":"Todas as fontes",favoritesOnly==f,()->{
+                if(favoritesOnly==f)return;favoritesOnly=f;
+                if(searchRefresh!=null){ui.removeCallbacks(searchRefresh);searchRefresh=null;}refreshShelf();});
+            LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,dp(42),1);if(i==1)p.leftMargin=dp(8);filters.addView(chip,p);
+        }
+        space(shelfContent,15);shelfSummary=col();fill(shelfContent,shelfSummary);
+        shelfAdapter=new ShelfAdapter(shelfColumns());shelfList.setAdapter(shelfAdapter);refreshShelf();
+        final EditText field=search;
+        search.addTextChangedListener(new TextWatcher(){
+            public void beforeTextChanged(CharSequence s,int a,int c,int z){}
+            public void onTextChanged(CharSequence s,int a,int b,int c){
+                if(field!=search)return;query=s.toString();
+                if(searchRefresh!=null)ui.removeCallbacks(searchRefresh);
+                searchRefresh=()->{searchRefresh=null;if(field==search&&shelfAdapter!=null)refreshShelf();};
+                ui.postDelayed(searchRefresh,180);
+            }
+            public void afterTextChanged(Editable e){}
+        });
+        shelfContent.setFocusableInTouchMode(true);shelfContent.requestFocus();
     }
-    void renderFilter(LinearLayout grid){
+    void refreshShelf(){
+        if(shelfAdapter==null||shelfSummary==null)return;
         for(int i=0;i<2;i++){TextView b=(TextView)filters.getChildAt(i);boolean selected=favoritesOnly==(i==1);
             b.setTextColor(selected?INK:WHITE);b.setBackground(new RippleDrawable(ColorStateList.valueOf(0x25ffffff),bg(selected?MINT:RAISED,13),null));}
-    }
-    void renderGrid(LinearLayout grid){
-        grid.removeAllViews();ArrayList<String> shown=new ArrayList<>();String q=query.trim().toLowerCase(Locale.ROOT);
-        for(int i=0;i<sites.length();i++){String s=sites.optString(i);if(checked(s)==null)continue;
-            if((!favoritesOnly||favorite(s))&&(name(s)+" "+s).toLowerCase(Locale.ROOT).contains(q))shown.add(s);}
+        ArrayList<String> shown=new ArrayList<>();String q=query.trim().toLowerCase(Locale.ROOT);
+        for(int i=0;i<sites.length();i++){String site=sites.optString(i);if(checked(site)==null)continue;
+            if((!favoritesOnly||favorite(site))&&(name(site)+" "+site).toLowerCase(Locale.ROOT).contains(q))shown.add(site);}
+        shelfSummary.removeAllViews();
         if(shown.isEmpty()){
             LinearLayout empty=col();pad(empty,20,30);empty.setBackground(border(PANEL,20,LINE));
             TextView symbol=bold("▤",46,MINT);symbol.setGravity(Gravity.CENTER);fill(empty,symbol);space(empty,16);
             TextView title=bold(sites.length()==0?"Sua próxima história começa aqui":favoritesOnly?"Nenhuma fonte favorita":"Nenhuma fonte encontrada",19,WHITE);title.setGravity(Gravity.CENTER);fill(empty,title);space(empty,9);
             TextView desc=text(sites.length()==0?"Adicione um endereço HTTPS. Cada site vira uma fonte independente na estante.":"Altere a busca ou marque suas fontes favoritas.",14,MUTED);desc.setGravity(Gravity.CENTER);fill(empty,desc);
-            if(sites.length()==0){space(empty,20);fill(empty,button("Adicionar meu primeiro site",true,()->editSite(null)));}fill(grid,empty);return;
+            if(sites.length()==0){space(empty,20);fill(empty,button("Adicionar meu primeiro site",true,()->editSite(null)));}fill(shelfSummary,empty);
+        }else{
+            if(!favoritesOnly&&q.isEmpty()&&history.length()>0){
+                JSONObject h=history.optJSONObject(0);if(h!=null){String site=h.optString("source");if(has(site)){
+                    LinearLayout resume=row();pad(resume,14,14);resume.setBackground(border(PANEL,16,LINE));
+                    LinearLayout words=col();fill(words,bold("CONTINUAR LENDO",10,MINT));space(words,7);fill(words,bold(name(site),17,WHITE));space(words,4);fill(words,text("Retomar última página",12,MUTED));weighted(resume,words,-2);
+                    resume.addView(button("Ler  ›",true,()->open(site,null)));fill(shelfSummary,resume);space(shelfSummary,18);}}}
+            fill(shelfSummary,bold("Fontes  •  "+shown.size(),16,WHITE));space(shelfSummary,5);
         }
-        if(!favoritesOnly&&q.isEmpty()&&history.length()>0){
-            JSONObject h=history.optJSONObject(0);if(h!=null){String s=h.optString("source");if(has(s)){
-                LinearLayout resume=row();pad(resume,14,14);resume.setBackground(border(PANEL,16,LINE));
-                LinearLayout words=col();fill(words,bold("CONTINUAR LENDO",10,MINT));space(words,7);fill(words,bold(name(s),17,WHITE));space(words,4);fill(words,text("Retomar última página",12,MUTED));weighted(resume,words,-2);
-                resume.addView(button("Ler  ›",true,()->open(s,null)));fill(grid,resume);space(grid,18);}}}
-        fill(grid,bold("Fontes  •  "+shown.size(),16,WHITE));space(grid,12);
-        int columns=getResources().getDisplayMetrics().widthPixels/dp(1)>=650?3:2;
-        for(int i=0;i<shown.size();i+=columns){LinearLayout r=row();r.setGravity(Gravity.TOP);
-            for(int j=0;j<columns;j++){LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-2,1);if(j>0)p.leftMargin=dp(12);
-                if(i+j<shown.size())r.addView(tile(shown.get(i+j)),p);else r.addView(new View(this),p);}
-            fill(grid,r);space(grid,12);}
+        shelfAdapter.replace(shown);
     }
-    View tile(String s){
-        LinearLayout c=col();c.setBackground(border(PANEL,16,LINE));c.setClipToOutline(true);
-        FrameLayout image=new FrameLayout(this);image.setBackground(bg(0xff273b34,16));c.addView(image,new LinearLayout.LayoutParams(-1,dp(135)));
-        Cover art=new Cover(s);image.addView(art,new FrameLayout.LayoutParams(-1,-1));
-        TextView star=bold(favorite(s)?"★":"☆",21,MINT);star.setGravity(Gravity.CENTER);star.setBackground(bg(0xcc151a1d,20));FrameLayout.LayoutParams sp=new FrameLayout.LayoutParams(dp(38),dp(38),Gravity.TOP|Gravity.END);sp.setMargins(0,dp(8),dp(8),0);image.addView(star,sp);
-        star.setContentDescription(favorite(s)?"Remover favorito":"Adicionar favorito");star.setOnClickListener(v->{prefs.edit().putBoolean(key("fav",s),!favorite(s)).apply();library();});
-        image.setOnClickListener(v->open(s,null));
-        LinearLayout info=col();pad(info,12,12);TextView n=bold(name(s),16,WHITE);n.setSingleLine();n.setEllipsize(TextUtils.TruncateAt.END);fill(info,n);space(info,5);
-        TextView domain=text(host(s),11,MUTED);domain.setSingleLine();domain.setEllipsize(TextUtils.TruncateAt.END);fill(info,domain);space(info,10);
-        LinearLayout actions=row();TextView read=button("Ler  ›",true,()->open(s,null));weighted(actions,read,dp(42));
-        TextView more=button("⋯",false,()->siteMenu(s));more.setContentDescription("Opções de "+name(s));LinearLayout.LayoutParams mp=new LinearLayout.LayoutParams(dp(42),dp(42));mp.leftMargin=dp(6);actions.addView(more,mp);fill(info,actions);fill(c,info);
-        c.setOnLongClickListener(v->{siteMenu(s);return true;});return c;
+    final class ShelfAdapter extends BaseAdapter {
+        final int columns;
+        List<String> items=Collections.emptyList();
+        ShelfAdapter(int columns){this.columns=columns;}
+        void replace(List<String> next){items=next;notifyDataSetChanged();}
+        @Override public int getCount(){return (items.size()+columns-1)/columns;}
+        @Override public Object getItem(int p){return items.get(p*columns);}
+        @Override public long getItemId(int p){return p;}
+        @Override public boolean isEnabled(int p){return false;}
+        @Override public View getView(int p,View old,ViewGroup parent){
+            ShelfRow r=old instanceof ShelfRow?(ShelfRow)old:new ShelfRow(columns);
+            for(int j=0;j<columns;j++){int index=p*columns+j;r.tiles[j].bind(index<items.size()?items.get(index):null);}
+            return r;
+        }
     }
-    class Cover extends View{
-        final String site;final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);
-        Cover(String s){super(Reader.this);site=s;setContentDescription("Capa de "+name(s));}
-        @Override protected void onDraw(Canvas c){super.onDraw(c);int w=getWidth(),h=getHeight();Bitmap b=cover(site);
+    final class ShelfRow extends LinearLayout {
+        final Tile[] tiles;
+        ShelfRow(int columns){super(Reader.this);setOrientation(HORIZONTAL);setGravity(Gravity.TOP);
+            setPadding(dp(20),0,dp(20),dp(12));setLayoutParams(new AbsListView.LayoutParams(-1,-2));
+            tiles=new Tile[columns];for(int i=0;i<columns;i++){
+                Tile t=new Tile();tiles[i]=t;LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-2,1);
+                if(i>0)p.leftMargin=dp(12);addView(t,p);
+            }
+        }
+    }
+    final class Tile extends LinearLayout {
+        final Cover art;final TextView star,n,domain,more;
+        String site;
+        Tile(){super(Reader.this);setOrientation(VERTICAL);setBackground(border(PANEL,16,LINE));setClipToOutline(true);
+            FrameLayout image=new FrameLayout(Reader.this);image.setBackground(bg(0xff273b34,16));addView(image,new LinearLayout.LayoutParams(-1,dp(135)));
+            art=new Cover();image.addView(art,new FrameLayout.LayoutParams(-1,-1));
+            star=bold("☆",21,MINT);star.setGravity(Gravity.CENTER);star.setBackground(bg(0xcc151a1d,20));
+            FrameLayout.LayoutParams sp=new FrameLayout.LayoutParams(dp(38),dp(38),Gravity.TOP|Gravity.END);sp.setMargins(0,dp(8),dp(8),0);image.addView(star,sp);
+            star.setOnClickListener(v->{String siteNow=site;if(siteNow==null)return;prefs.edit().putBoolean(key("fav",siteNow),!favorite(siteNow)).apply();
+                if(favoritesOnly)refreshShelf();else updateStar();});
+            image.setOnClickListener(v->{if(site!=null)open(site,null);});
+            LinearLayout info=col();pad(info,12,12);n=bold("",16,WHITE);n.setSingleLine();n.setEllipsize(TextUtils.TruncateAt.END);fill(info,n);space(info,5);
+            domain=text("",11,MUTED);domain.setSingleLine();domain.setEllipsize(TextUtils.TruncateAt.END);fill(info,domain);space(info,10);
+            LinearLayout actions=row();weighted(actions,button("Ler  ›",true,()->{if(site!=null)open(site,null);}),dp(42));
+            more=button("⋯",false,()->{if(site!=null)siteMenu(site);});LinearLayout.LayoutParams mp=new LinearLayout.LayoutParams(dp(42),dp(42));mp.leftMargin=dp(6);actions.addView(more,mp);
+            fill(info,actions);fill(this,info);setOnLongClickListener(v->{if(site!=null)siteMenu(site);return true;});
+        }
+        void updateStar(){boolean f=site!=null&&favorite(site);star.setText(f?"★":"☆");star.setContentDescription(f?"Remover favorito":"Adicionar favorito");}
+        void bind(String siteNow){site=siteNow;setVisibility(site==null?INVISIBLE:VISIBLE);art.bind(site);
+            if(site==null)return;n.setText(name(site));domain.setText(host(site));more.setContentDescription("Opções de "+name(site));updateStar();}
+    }
+    final class Cover extends View{
+        final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);
+        final RectF target=new RectF();
+        final Typeface face=Typeface.create("sans-serif-medium",Typeface.BOLD);
+        final int[] palette={0xff23483e,0xff36425c,0xff4a3651,0xff514437,0xff244a52};
+        String site,uri="",letter="K",requestedKey="";
+        Bitmap image;Future<?> task;int token,base=palette[0],retryCount;boolean finishedRequest;
+        final Runnable retry=()->requestCover();
+        Cover(){super(Reader.this);}
+        void bind(String next){
+            String nextUri=next==null?"":prefs.getString(key("cover",next),"");
+            String title=next==null?"":name(next).trim();
+            String nextLetter=title.isEmpty()?"K":title.substring(0,title.offsetByCodePoints(0,1)).toUpperCase(Locale.ROOT);
+            if(Objects.equals(site,next)&&uri.equals(nextUri)&&letter.equals(nextLetter)){requestCover();return;}
+            cancel();site=next;uri=nextUri;letter=nextLetter;image=null;requestedKey="";finishedRequest=false;
+            base=palette[Math.floorMod(next==null?0:next.hashCode(),palette.length)];
+            setContentDescription(next==null?null:"Capa de "+name(next));invalidate();requestCover();
+        }
+        void cancel(){token++;removeCallbacks(retry);covers.cancel(task);task=null;retryCount=0;}
+        @Override protected void onAttachedToWindow(){super.onAttachedToWindow();requestCover();}
+        @Override protected void onDetachedFromWindow(){cancel();image=null;requestedKey="";finishedRequest=false;super.onDetachedFromWindow();}
+        @Override protected void onSizeChanged(int w,int h,int oldw,int oldh){super.onSizeChanged(w,h,oldw,oldh);requestCover();}
+        void requestCover(){
+            if(site==null||uri.isEmpty()||!isAttachedToWindow()||getWidth()==0||getHeight()==0||isDestroyed())return;
+            int size=PerfPolicy.coverBucket(Math.max(getWidth(),getHeight()));
+            String cacheKey=uri+"|"+size;
+            if(cacheKey.equals(requestedKey)&&(image!=null||task!=null||finishedRequest))return;
+            if(!cacheKey.equals(requestedKey)){cancel();image=null;finishedRequest=false;requestedKey=cacheKey;}
+            Bitmap hit=covers.get(cacheKey);if(hit!=null){image=hit;invalidate();return;}
+            final int id=token;WeakReference<Cover> ref=new WeakReference<>(this);
+            task=covers.load(uri,cacheKey,size,bitmap->{
+                Cover v=ref.get();if(v==null||id!=v.token||!v.isAttachedToWindow()||!cacheKey.equals(v.requestedKey))return;
+                v.task=null;v.finishedRequest=true;v.image=bitmap;v.invalidate();
+            });
+            if(task==null&&retryCount++<3){removeCallbacks(retry);postDelayed(retry,180);}
+        }
+        @Override protected void onDraw(Canvas c){super.onDraw(c);int w=getWidth(),h=getHeight();Bitmap b=image;
             if(b!=null){float scale=Math.max((float)w/b.getWidth(),(float)h/b.getHeight());float dw=b.getWidth()*scale,dh=b.getHeight()*scale;
-                c.drawBitmap(b,null,new RectF((w-dw)/2,(h-dh)/2,(w+dw)/2,(h+dh)/2),p);return;}
-            int[] colors={0xff23483e,0xff36425c,0xff4a3651,0xff514437,0xff244a52};int base=colors[Math.floorMod(site.hashCode(),colors.length)];
+                target.set((w-dw)/2,(h-dh)/2,(w+dw)/2,(h+dh)/2);c.drawBitmap(b,null,target,p);return;}
             c.drawColor(base);p.setColor(0x22ffffff);c.drawCircle(w*.90f,h*.1f,h*.80f,p);c.drawCircle(w*.10f,h*.95f,h*.55f,p);
             p.setColor(0x18ffffff);c.drawRoundRect(w*.25f,h*.15f,w*.75f,h*.85f,dp(16),dp(16),p);
-            String label=name(site).trim();String letter=label.isEmpty()?"K":label.substring(0,label.offsetByCodePoints(0,1)).toUpperCase(Locale.ROOT);
-            p.setColor(WHITE);p.setTypeface(Typeface.create("sans-serif-medium",Typeface.BOLD));p.setTextSize(dp(48));p.setTextAlign(Paint.Align.CENTER);c.drawText(letter,w/2f,h/2f-(p.ascent()+p.descent())/2,p);}
-    }
-    Bitmap cover(String s){
-        if(covers.containsKey(s))return covers.get(s);String value=prefs.getString(key("cover",s),"");if(value.isEmpty())return null;
-        Bitmap b=null;try{Uri u=Uri.parse(value);BitmapFactory.Options o=new BitmapFactory.Options();o.inJustDecodeBounds=true;
-            try(InputStream in=getContentResolver().openInputStream(u)){BitmapFactory.decodeStream(in,null,o);}
-            o.inSampleSize=1;while(Math.max(o.outWidth,o.outHeight)/o.inSampleSize>640)o.inSampleSize*=2;
-            o.inJustDecodeBounds=false;try(InputStream in=getContentResolver().openInputStream(u)){b=BitmapFactory.decodeStream(in,null,o);}
-        }catch(Exception ignored){}if(covers.size()>24)covers.clear();covers.put(s,b);return b;
+            p.setColor(WHITE);p.setTypeface(face);p.setTextSize(dp(48));p.setTextAlign(Paint.Align.CENTER);c.drawText(letter,w/2f,h/2f-(p.ascent()+p.descent())/2,p);
+        }
     }
 
     void editSite(String existing){
@@ -210,14 +311,14 @@ public class Reader extends Activity {
                 case 4:siteSettings(s);break;case 5:open(s,s);break;case 6:new AlertDialog.Builder(this).setTitle("Remover "+name(s)+"?").setMessage("A fonte e suas preferências serão removidas.").setNegativeButton("Cancelar",null).setPositiveButton("Remover",(a,b)->remove(s)).show();break;}
         }).show();
     }
-    void forgetCover(String s){String u=prefs.getString(key("cover",s),"");prefs.edit().remove(key("cover",s)).apply();covers.remove(s);
+    void forgetCover(String s){String u=prefs.getString(key("cover",s),"");prefs.edit().remove(key("cover",s)).apply();covers.invalidate(u);
         if(!u.isEmpty()){boolean used=false;for(int i=0;i<sites.length();i++)if(u.equals(prefs.getString(key("cover",sites.optString(i)),"")))used=true;
             if(!used)try{getContentResolver().releasePersistableUriPermission(Uri.parse(u),Intent.FLAG_GRANT_READ_URI_PERMISSION);}catch(Exception ignored){}}}
     @Override protected void onActivityResult(int req,int result,Intent data){super.onActivityResult(req,result,data);
         if(req!=PICK_COVER)return;String s=pickSite;pickSite=null;if(result!=RESULT_OK||data==null||data.getData()==null||s==null||!has(s))return;
         Uri u=data.getData();try{getContentResolver().takePersistableUriPermission(u,Intent.FLAG_GRANT_READ_URI_PERMISSION);
             if(!u.toString().equals(prefs.getString(key("cover",s),"")))forgetCover(s);
-            prefs.edit().putString(key("cover",s),u.toString()).apply();covers.remove(s);library();}
+            prefs.edit().putString(key("cover",s),u.toString()).apply();covers.invalidate(u.toString());library();}
         catch(Exception e){toast("Não foi possível salvar essa capa.");}}
     void remove(String s){forgetCover(s);for(int i=0;i<sites.length();i++)if(s.equals(sites.optString(i))){sites.remove(i);break;}
         for(int i=history.length()-1;i>=0;i--){JSONObject h=history.optJSONObject(i);if(h!=null&&s.equals(h.optString("source")))history.remove(i);}
@@ -235,7 +336,8 @@ public class Reader extends Activity {
         }).show();
     }
     void record(String s,String url){
-        if(!has(s)||url==null||url.length()>4096)return;
+        if(!has(s)||url==null||url.length()>4096||url.equals(lastRecordedUrl))return;
+        lastRecordedUrl=url;
         for(int i=history.length()-1;i>=0;i--){JSONObject h=history.optJSONObject(i);if(h!=null&&s.equals(h.optString("source"))&&url.equals(h.optString("url")))history.remove(i);}
         JSONObject item=new JSONObject();try{item.put("source",s);item.put("url",url);item.put("time",System.currentTimeMillis());}catch(Exception ignored){}
         JSONArray next=new JSONArray();next.put(item);for(int i=0;i<history.length()&&i<59;i++)next.put(history.optJSONObject(i));history=next;
@@ -257,9 +359,15 @@ public class Reader extends Activity {
         fill(panel,text("O painel oficial permite ajustar filtros e consultar os números do bloqueador. O status acima indica que a extensão foi habilitada.",13,MUTED));space(panel,14);
         fill(panel,button("Abrir painel do uBlock",true,this::openDashboard));if(failed){space(panel,8);fill(panel,button("Tentar novamente",false,this::prepare));}
         fill(shelfContent,panel);space(shelfContent,16);
+        LinearLayout perf=col();pad(perf,16,16);perf.setBackground(border(PANEL,16,LINE));
+        fill(perf,bold("Desempenho",18,WHITE));space(perf,8);
+        Switch warm=new Switch(this);warm.setText("Preparar próxima imagem");warm.setChecked(!covers.lowRam()&&prefs.getBoolean("predecode",true));warm.setEnabled(!covers.lowRam());
+        warm.setOnCheckedChangeListener((v,on)->prefs.edit().putBoolean("predecode",on).apply());fill(perf,warm);
+        space(perf,6);fill(perf,text(covers.lowRam()?"Modo leve automático: preparação extra desativada neste aparelho.":"Prepara somente uma imagem próxima, já baixada, quando o leitor está ocioso. Não reduz a qualidade.",13,MUTED));
+        space(perf,8);fill(perf,text("Cache de capas: até "+(covers.limitBytes()/1048576)+" MiB. Imagens de capítulos continuam sob controle do Gecko.",12,MUTED));fill(shelfContent,perf);space(shelfContent,16);
         LinearLayout reading=col();pad(reading,16,16);reading.setBackground(border(PANEL,16,LINE));fill(reading,bold("Como usar",18,WHITE));space(reading,9);
         fill(reading,text("• Voltar mostra os controles durante a tela cheia.\n• Ajuste o modo e a capa em cada fonte.\n• O Koma salva a página e tenta recuperar a posição em leitores compatíveis.",14,MUTED));fill(shelfContent,reading);space(shelfContent,22);
-        fill(shelfContent,text("KOMA 2.0  ·  GeckoView 150  ·  ARM64",12,MUTED));
+        fill(shelfContent,text("KOMA 3.0  ·  GeckoView 150  ·  ARM64",12,MUTED));
     }
     void toast(String s){Toast.makeText(this,s,Toast.LENGTH_SHORT).show();}
     void openDashboard(){
@@ -274,6 +382,7 @@ public class Reader extends Activity {
         String u=explicit==null?last(s):explicit;String valid=checked(u);if(valid==null)valid=s;startReader(s,valid,false);
     }
     void startReader(String s,String url,boolean isDashboard){
+        flushPosition();positionSource=null;positionUrl=null;lastRecordedUrl=null;pageStartedAt=0;
         source=s;dashboard=isDashboard;pageUrl=url;canBack=false;full=!isDashboard&&prefs.getBoolean(key("fullscreen",s),true);root(true);
         bar=col();bar.setBackgroundColor(PANEL);LinearLayout top=row();pad(top,10,8);
         TextView exit=button("‹",false,this::closeReader);exit.setContentDescription("Voltar à estante");top.addView(exit,new LinearLayout.LayoutParams(dp(46),dp(46)));
@@ -283,27 +392,36 @@ public class Reader extends Activity {
         if(!isDashboard){LinearLayout controls=row();pad(controls,10,5);String[] names={"Voltar","Recarregar","Tela cheia"};Runnable[] actions={()->{if(session!=null&&canBack)session.goBack();},()->{if(session!=null)session.reload();},()->setFull(true)};
             for(int i=0;i<3;i++){LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,dp(42),1);if(i>0)p.leftMargin=dp(6);controls.addView(button(names[i],i==2,actions[i]),p);}fill(bar,controls);}
         progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);progress.setMax(100);progress.setProgressTintList(ColorStateList.valueOf(MINT));bar.addView(progress,new LinearLayout.LayoutParams(-1,dp(2)));fill(root,bar);
-        browser=new GeckoView(this);root.addView(browser,new LinearLayout.LayoutParams(-1,0,1));session=new GeckoSession();
+        browser=new GeckoView(this);browser.setBackgroundColor(Color.BLACK);root.addView(browser,new LinearLayout.LayoutParams(-1,0,1));session=new GeckoSession();
         final String trustedDashboard=isDashboard?url.substring(0,url.indexOf("/", "moz-extension://".length())+1):"";
         session.setNavigationDelegate(new GeckoSession.NavigationDelegate(){
             @Override public void onCanGoBack(GeckoSession gs,boolean b){if(gs==session)canBack=b;}
             @Override public void onLocationChange(GeckoSession gs,String loc,List<GeckoSession.PermissionDelegate.ContentPermission> permissions,Boolean gesture){
-                if(gs!=session||loc==null)return;pageUrl=loc;if(!dashboard){readerHost.setText(host(loc));if(sameSite(loc)){record(source,loc);}}}
+                if(gs!=session||loc==null)return;
+                if(!loc.equals(pageUrl)){flushPosition();positionSource=null;positionUrl=null;}
+                pageUrl=loc;if(!dashboard){String domain=host(loc);if(!TextUtils.equals(readerHost.getText(),domain))readerHost.setText(domain);if(sameSite(loc)){record(source,loc);}}}
             @Override public GeckoResult<AllowOrDeny> onLoadRequest(GeckoSession gs,LoadRequest r){
                 if(r.uri==null)return GeckoResult.deny();boolean trusted=isDashboard&&!trustedDashboard.isEmpty()&&r.uri.startsWith(trustedDashboard);
                 if(!trusted&&!r.uri.startsWith("https://"))return GeckoResult.deny();
                 if(r.target==TARGET_WINDOW_NEW){if(r.hasUserGesture&&gs==session&&!isDashboard)gs.loadUri(r.uri);return GeckoResult.deny();}return GeckoResult.allow();}
         });
         session.setProgressDelegate(new GeckoSession.ProgressDelegate(){
-            @Override public void onProgressChange(GeckoSession gs,int value){if(gs==session){progress.setProgress(value);progress.setVisibility(value<100?View.VISIBLE:View.INVISIBLE);}}
-            @Override public void onPageStop(GeckoSession gs,boolean ok){if(gs==session){progress.setVisibility(View.INVISIBLE);if(!ok){setFull(false);toast("Não foi possível carregar. Tente recarregar.");}}}
+            @Override public void onPageStart(GeckoSession gs,String url){if(gs==session){pageStartedAt=SystemClock.elapsedRealtime();if(!full){progress.setProgress(0);progress.setVisibility(View.VISIBLE);}}}
+            @Override public void onProgressChange(GeckoSession gs,int value){if(gs==session&&!full){
+                if(value==100||value-progress.getProgress()>=5||value<progress.getProgress())progress.setProgress(value);
+                int visibility=value<100?View.VISIBLE:View.INVISIBLE;if(progress.getVisibility()!=visibility)progress.setVisibility(visibility);}}
+            @Override public void onPageStop(GeckoSession gs,boolean ok){if(gs==session){progress.setVisibility(View.INVISIBLE);
+                if(pageStartedAt>0)android.util.Log.d("KomaPerf","page_stop_ms="+(SystemClock.elapsedRealtime()-pageStartedAt)+" success="+ok);
+                pageStartedAt=0;if(!ok){setFull(false);toast("Não foi possível carregar. Tente recarregar.");}}}
         });
         if(!isDashboard&&pages!=null)session.getWebExtensionController().setMessageDelegate(pages,new WebExtension.MessageDelegate(){
             @Override public GeckoResult<Object> onMessage(String app,Object message,WebExtension.MessageSender sender){
                 if(sender.session!=session||dashboard||source==null||!(message instanceof JSONObject))return null;
                 JSONObject m=(JSONObject)message;String u=m.optString("url");if(!sameSite(u)||!u.equals(sender.url))return null;
-                if("init".equals(m.optString("type"))){JSONObject result=new JSONObject();try{result.put("mode",mode(source));result.put("y",u.equals(prefs.getString(key("positionUrl",source),""))?prefs.getInt(key("position",source),0):0);}catch(Exception ignored){}return GeckoResult.fromValue((Object)result);}
-                if("position".equals(m.optString("type"))&&u.equals(pageUrl)){int y=Math.max(0,Math.min(10000000,m.optInt("y",0)));prefs.edit().putString(key("positionUrl",source),u).putInt(key("position",source),y).apply();}
+                if("init".equals(m.optString("type"))){JSONObject result=new JSONObject();try{
+                    result.put("mode",mode(source));result.put("y",savedPosition(source,u));
+                    result.put("predecode",!covers.lowRam()&&prefs.getBoolean("predecode",true));}catch(Exception ignored){}return GeckoResult.fromValue((Object)result);}
+                if("position".equals(m.optString("type"))&&u.equals(pageUrl)){int y=PerfPolicy.clampPosition(m.optInt("y",0));queuePosition(source,u,y,m.optBoolean("flush",false));}
                 return null;}
         },"koma");
         session.open(engine);browser.setSession(session);setFull(full);session.loadUri(url);
@@ -315,14 +433,37 @@ public class Reader extends Activity {
         new AlertDialog.Builder(this).setTitle(name(source)).setItems(new String[]{"Página inicial","Configurar leitura","Copiar endereço","Painel do uBlock","Voltar à estante"},(d,i)->{
             switch(i){case 0:session.loadUri(source);break;case 1:siteSettings(source);break;case 2:((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("Página",pageUrl));toast("Endereço copiado.");break;case 3:openDashboard();break;case 4:closeReader();break;}}).show();
     }
+    int savedPosition(String s,String url){
+        if(Objects.equals(s,positionSource)&&Objects.equals(url,positionUrl))return positionY;
+        return url.equals(prefs.getString(key("positionUrl",s),""))?prefs.getInt(key("position",s),0):0;
+    }
+    void queuePosition(String s,String url,int y,boolean urgent){
+        if(!Objects.equals(s,positionSource)||!Objects.equals(url,positionUrl)){
+            flushPosition();positionSource=s;positionUrl=url;positionY=savedPositionFromDisk(s,url);
+        }
+        if(y!=positionY||!url.equals(prefs.getString(key("positionUrl",s),""))){positionY=y;positionDirty=true;}
+        if(urgent||!foreground){flushPosition();return;}
+        if(positionDirty&&!positionScheduled){positionScheduled=true;ui.postDelayed(positionFlush,4000);}
+    }
+    int savedPositionFromDisk(String s,String url){return url.equals(prefs.getString(key("positionUrl",s),""))?prefs.getInt(key("position",s),0):0;}
+    void flushPosition(){
+        ui.removeCallbacks(positionFlush);positionScheduled=false;
+        if(positionDirty&&positionSource!=null&&positionUrl!=null){
+            prefs.edit().putString(key("positionUrl",positionSource),positionUrl).putInt(key("position",positionSource),positionY).apply();
+            positionDirty=false;
+        }
+    }
     void immersive(){getWindow().getDecorView().setSystemUiVisibility(full?View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN|View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_LAYOUT_STABLE:0);}
     void setFull(boolean v){full=v;bar.setVisibility(v?View.GONE:View.VISIBLE);root.setFitsSystemWindows(!v);root.requestApplyInsets();immersive();}
-    void release(){if(session!=null){GeckoSession old=session;session=null;browser.releaseSession();old.close();browser=null;}}
+    void release(){flushPosition();positionSource=null;positionUrl=null;if(session!=null){GeckoSession old=session;session=null;browser.releaseSession();old.close();browser=null;}}
     void closeReader(){release();source=null;pageUrl=null;library();}
     @Override public void onBackPressed(){if(session==null){if(tab!=0){tab=0;library();}else super.onBackPressed();}else if(full)setFull(false);else if(canBack)session.goBack();else closeReader();}
     @Override public void onWindowFocusChanged(boolean focus){super.onWindowFocusChanged(focus);if(focus&&full)immersive();}
-    @Override protected void onPause(){if(session!=null)session.setActive(false);super.onPause();}
-    @Override protected void onResume(){super.onResume();if(session!=null)session.setActive(true);}
+    @Override protected void onPause(){foreground=false;flushPosition();if(session!=null)session.setActive(false);super.onPause();}
+    @Override protected void onResume(){super.onResume();foreground=true;if(session!=null)session.setActive(true);}
+    @Override public void onTrimMemory(int level){super.onTrimMemory(level);if(covers!=null)covers.trim(level);}
+    @Override public void onLowMemory(){super.onLowMemory();if(covers!=null)covers.clear();}
+    @Override public void onConfigurationChanged(Configuration c){super.onConfigurationChanged(c);if(session==null&&tab==0)library();}
     @Override protected void onSaveInstanceState(Bundle b){super.onSaveInstanceState(b);b.putString("source",source!=null?source:pending);b.putString("pickSite",pickSite);}
-    @Override protected void onDestroy(){release();super.onDestroy();}
+    @Override protected void onDestroy(){release();if(searchRefresh!=null)ui.removeCallbacks(searchRefresh);if(covers!=null)covers.close();super.onDestroy();}
 }

@@ -32,6 +32,12 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.4.1'
+      - name: Testar políticas de desempenho
+        run: |
+          node --test tools/tests/reader-perf.test.cjs
+          mkdir -p "$RUNNER_TEMP/koma-tests"
+          javac -d "$RUNNER_TEMP/koma-tests" app/src/main/java/br/app/koma/PerfPolicy.java tools/tests/PerfPolicyTest.java
+          java -cp "$RUNNER_TEMP/koma-tests" br.app.koma.PerfPolicyTest
       - run: gradle :app:assembleDebug --stacktrace
       - name: Verificar conteúdo do APK
         run: |

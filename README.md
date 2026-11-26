@@ -21,7 +21,7 @@ O arquivo fica em app/build/outputs/apk/debug/app-debug.apk.
 4. Segure um site na estante para abrir sua página inicial ou removê-lo.
 
 ## Imagem e memória
-O leitor usa uma sessão Gecko por vez. A estante libera a sessão. O app mantém a imagem entregue pelo site e deixa a decodificação, o zoom e o cache com o Gecko. Em leitores com contêineres reconhecidos, o estilo de leitura ajusta imagens largas e mantém a proporção. Em outros sites, vale o layout original. O endereço é salvo por site. A posição de rolagem dentro do capítulo não é salva.
+O leitor usa uma sessão Gecko por vez. A estante libera a sessão. O app mantém a imagem entregue pelo site e deixa a decodificação, o zoom e o cache com o Gecko. Em leitores com contêineres reconhecidos, o estilo de leitura ajusta imagens largas e mantém a proporção. Em outros sites, vale o layout original. O endereço e a última posição de rolagem são salvos por fonte; a restauração depende do carregamento do site. A estante usa linhas recicláveis e capas decodificadas em segundo plano. O Koma não baixa cópias das imagens dos capítulos nem reduz sua qualidade. Em leitores reconhecidos, a preparação opcional tenta decodificar apenas uma imagem próxima que já terminou de carregar. Veja PERFORMANCE.md para detalhes e limites.
 
 ## Componentes
 Mozilla GeckoView (MPL-2.0) e uBlock Origin (GPL-3.0). O script tools/blocker.py baixa a versão indicada do catálogo da Mozilla, confere o resumo SHA-256 e a identidade da extensão e inclui seu conteúdo no APK. A extensão é inicializada antes da primeira página. Para atualizar o código do bloqueador, altere a versão e gere outro APK.
