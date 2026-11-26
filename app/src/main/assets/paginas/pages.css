@@ -10,3 +10,6 @@
 :root.koma-continuous :where(.reading-content .page-break,#readerarea,.wp-manga-chapter-img-wrap) img:not([usemap]) {
   margin-block:0 !important;
 }
+
+/* Opt-in only on non-interactive chapter images; preserve normal touch elsewhere. */
+:root.koma-doubletap :where(.reading-content .page-break,#readerarea,.wp-manga-chapter-img-wrap) img:not([usemap]):not(a img):not(button img) { touch-action: manipulation; }

@@ -1,0 +1,11 @@
+# Koma 4.0 — GUT 3: experiência de leitura
+- Controles nativos superiores/inferiores sobre a página quando solicitados; em tela cheia ficam ocultos. A abertura dos controles não recria a sessão. Barras do Android ainda podem alterar a altura útil.
+- Ajustes por fonte: brilho (5–100% ou sistema), rotação automática/retrato/paisagem/bloquear orientação atual, manter a tela ligada, dois toques opcional, velocidade de 30–300 CSS px/s e avanço opcional ao fim da rolagem automática.
+- Brilho e orientação são restaurados ao sair; nenhum ajuste global do Android é alterado. O Android pode ignorar a orientação em telas grandes.
+- Rolagem automática usa requestAnimationFrame, com passo baseado no tempo. Para ao tocar, usar teclado/roda, ocultar o app, abrir ajustes, navegar ou fechar a sessão. No fim espera cerca de 3 s por conteúdo tardio; não continua automaticamente no próximo capítulo.
+- Detecção conservadora de capítulos: apenas leitores conhecidos com imagens, links rel next/prev ou seletores de capítulo. Links externos, fragmentos da mesma página e protocolos inseguros não são aceitos. Avanço automático só se habilitado, com rolagem automática em curso, no final da página e link validado. Sites que usam APIs ou outros componentes de navegação exigirão adaptadores futuros.
+- Progresso é percentual da rolagem da página, não número de páginas ou obras concluídas. Posição em pixels salva por URL, limite global de 120, migração da última posição da versão anterior. Restauração depende do tamanho do conteúdo e pode variar com a rotação. Sem sincronização externa.
+- A ponte é específica da extensão e da sessão, frame superior e mesma URL; comandos limitados a start/stop/status/settings. Não executa JavaScript recebido de sites.
+- Preservadas otimizações da versão 3.0 e regras 3.1; teste de GeckoView mais recente separado. Auditoria comparativa de memória, FPS, consumo e estabilidade prevista para depois das sete prioridades.
+## Validação manual
+Teste um capítulo com navegação reconhecida e outro não reconhecido; confira botões, tela cheia, posição de dois capítulos, alteração de brilho/rotação, pause ao tocar ou mudar de app, teste avanço automático desligado e ligado. Confirme que os bloqueios e as imagens seguem funcionando. Não use credenciais reais para testes de segurança.

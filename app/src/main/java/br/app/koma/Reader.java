@@ -11,6 +11,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.content.res.Configuration;
+import android.content.pm.ActivityInfo;
 import java.lang.ref.WeakReference;
 import java.util.concurrent.Future;
 import android.text.*;
@@ -52,7 +53,13 @@ public class Reader extends Activity {
     boolean positionDirty, positionScheduled, foreground;
     long pageStartedAt, lastBlockedNotice;
     int blockedNavigation;
-    boolean isolatedSession;
+    WebExtension.Port readerPort;
+    TextView autoButton, previousButton, nextButton, readingPercent;
+    LinearLayout readingTools;
+    String nextChapter, previousChapter;
+    boolean autoRunning, chapterDetected;
+    int readingProgress;
+    ReadingPositions readingPositions;
     final Runnable positionFlush = this::flushPosition;
 
     @Override public void onCreate(Bundle saved) {
@@ -60,6 +67,7 @@ public class Reader extends Activity {
         getWindow().setStatusBarColor(BG); getWindow().setNavigationBarColor(BG);
         prefs=getSharedPreferences("shelf", MODE_PRIVATE);
         sites=array("sites"); history=array("history");
+        readingPositions=new ReadingPositions(prefs.getString("chapterPositions","[]"));
         covers=new CoverLoader(getApplicationContext());
         if(saved!=null){pending=saved.getString("source");pickSite=saved.getString("pickSite");}
         engine=GeckoRuntime.getDefault(this);
@@ -350,20 +358,72 @@ public class Reader extends Activity {
     void remove(String s){
         String old=prefs.getString(key("context",s),"");
         if(!old.isEmpty())engine.getStorageController().clearDataForSessionContext(old);
-        prefs.edit().remove(key("context",s)).apply();forgetCover(s);for(int i=0;i<sites.length();i++)if(s.equals(sites.optString(i))){sites.remove(i);break;}
+        readingPositions.removeSource(s);
+        prefs.edit().remove(key("context",s)).putString("chapterPositions",readingPositions.serialize()).apply();forgetCover(s);for(int i=0;i<sites.length();i++)if(s.equals(sites.optString(i))){sites.remove(i);break;}
         for(int i=history.length()-1;i>=0;i--){JSONObject h=history.optJSONObject(i);if(h!=null&&s.equals(h.optString("source")))history.remove(i);}
-        SharedPreferences.Editor ed=prefs.edit();for(String k:new String[]{"name","last","fav","mode","fullscreen","position","positionUrl"})ed.remove(key(k,s));
+        SharedPreferences.Editor ed=prefs.edit();for(String k:new String[]{"name","last","fav","mode","fullscreen","position","positionUrl","brightness","rotation","keepAwake","doubleTap","autoNext","scrollSpeed"})ed.remove(key(k,s));
         ed.putString("history",history.toString()).putString("sites",sites.toString()).apply();library();}
+    int scrollSpeed(String s){return ReadingPolicy.speed(prefs.getInt(key("scrollSpeed",s),100));}
     void siteSettings(String s){
-        LinearLayout box=col();pad(box,22,10);fill(box,text("Modo de exibição",13,MUTED));space(box,8);
-        RadioGroup modes=new RadioGroup(this);String[] values={"fit","continuous","original"},labels={"Ajustar largura","Webtoon (sem espaços em leitores conhecidos)","Original do site"};
-        for(int i=0;i<3;i++){RadioButton radio=new RadioButton(this);radio.setId(100+i);radio.setText(labels[i]);radio.setButtonTintList(ColorStateList.valueOf(MINT));modes.addView(radio);if(values[i].equals(mode(s)))modes.check(100+i);}fill(box,modes);space(box,8);
+        pauseAuto();
+        ScrollView scroll=new ScrollView(this);LinearLayout box=col();pad(box,22,10);scroll.addView(box);
+        fill(box,bold("Exibição",16,WHITE));space(box,8);
+        RadioGroup modes=new RadioGroup(this);String[] values={"fit","continuous","original"},labels={"Ajustar largura","Webtoon • remover espaços","Original do site"};
+        for(int i=0;i<3;i++){RadioButton radio=new RadioButton(this);radio.setId(100+i);radio.setText(labels[i]);radio.setButtonTintList(ColorStateList.valueOf(MINT));modes.addView(radio);if(values[i].equals(mode(s)))modes.check(100+i);}
+        fill(box,modes);space(box,10);
         Switch fs=new Switch(this);fs.setText("Abrir em tela cheia");fs.setChecked(prefs.getBoolean(key("fullscreen",s),true));fill(box,fs);
-        new AlertDialog.Builder(this).setTitle("Leitura • "+name(s)).setView(box).setNegativeButton("Cancelar",null).setPositiveButton("Salvar",(d,i)->{
+        Switch awake=new Switch(this);awake.setText("Manter tela ligada durante a leitura");awake.setChecked(prefs.getBoolean(key("keepAwake",s),true));fill(box,awake);
+        space(box,18);fill(box,bold("Brilho e rotação",16,WHITE));space(box,8);
+        Switch system=new Switch(this);system.setText("Usar brilho do sistema");int oldBrightness=prefs.getInt(key("brightness",s),-1);system.setChecked(oldBrightness<0);fill(box,system);
+        SeekBar light=new SeekBar(this);light.setMax(95);light.setProgress(ReadingPolicy.brightness(oldBrightness<0?60:oldBrightness)-5);light.setEnabled(!system.isChecked());fill(box,light);
+        TextView lightLabel=text("Brilho: "+(light.getProgress()+5)+"%",12,MUTED);fill(box,lightLabel);
+        system.setOnCheckedChangeListener((v,on)->light.setEnabled(!on));
+        light.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onProgressChanged(SeekBar b,int p,boolean user){lightLabel.setText("Brilho: "+(p+5)+"%");}public void onStartTrackingTouch(SeekBar b){}public void onStopTrackingTouch(SeekBar b){}});
+        RadioGroup rotation=new RadioGroup(this);String[] orientations={"Automática (sistema)","Retrato","Paisagem","Bloquear posição atual"};
+        for(int i=0;i<orientations.length;i++){RadioButton b=new RadioButton(this);b.setId(200+i);b.setText(orientations[i]);b.setButtonTintList(ColorStateList.valueOf(MINT));rotation.addView(b);if(i==prefs.getInt(key("rotation",s),0))rotation.check(200+i);}fill(box,rotation);
+        space(box,18);fill(box,bold("Gestos e rolagem",16,WHITE));space(box,8);
+        Switch tap=new Switch(this);tap.setText("Dois toques na imagem: mostrar controles");tap.setChecked(prefs.getBoolean(key("doubleTap",s),false));fill(box,tap);
+        fill(box,text("Opcional; pode interferir no zoom por toque. O gesto Voltar continua disponível.",12,MUTED));space(box,10);
+        Switch next=new Switch(this);next.setText("Avançar capítulo ao fim da rolagem automática");next.setChecked(prefs.getBoolean(key("autoNext",s),false));fill(box,next);
+        fill(box,text("Somente quando há um link de capítulo reconhecido. Não avança durante a leitura manual.",12,MUTED));space(box,8);
+        SeekBar speed=new SeekBar(this);speed.setMax(27);speed.setProgress((scrollSpeed(s)-30)/10);
+        TextView speedLabel=text("Velocidade: "+(30+speed.getProgress()*10)+" px/s",13,MUTED);fill(box,speedLabel);fill(box,speed);
+        speed.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onProgressChanged(SeekBar b,int p,boolean user){speedLabel.setText("Velocidade: "+(30+p*10)+" px/s");}public void onStartTrackingTouch(SeekBar b){}public void onStopTrackingTouch(SeekBar b){}});
+        space(box,12);
+        new AlertDialog.Builder(this).setTitle("Leitura • "+name(s)).setView(scroll).setNegativeButton("Cancelar",null).setPositiveButton("Salvar",(d,i)->{
             int selected=modes.getCheckedRadioButtonId()-100;if(selected<0||selected>2)selected=0;
-            prefs.edit().putString(key("mode",s),values[selected]).putBoolean(key("fullscreen",s),fs.isChecked()).apply();
-            if(session!=null&&!dashboard)session.reload();else library();
+            int orientation=rotation.getCheckedRadioButtonId()-200;if(orientation<0||orientation>3)orientation=0;
+            boolean modeChanged=!mode(s).equals(values[selected]);
+            prefs.edit().putString(key("mode",s),values[selected]).putBoolean(key("fullscreen",s),fs.isChecked())
+                .putBoolean(key("keepAwake",s),awake.isChecked()).putInt(key("brightness",s),system.isChecked()?-1:light.getProgress()+5)
+                .putInt(key("rotation",s),orientation).putBoolean(key("doubleTap",s),tap.isChecked())
+                .putBoolean(key("autoNext",s),next.isChecked()).putInt(key("scrollSpeed",s),30+speed.getProgress()*10).apply();
+            if(session!=null&&!dashboard&&s.equals(source)){
+                applyReadingWindow(s);if(modeChanged){flushPosition();session.reload();}else sendReaderCommand("settings",readingConfig(s,pageUrl));
+            }else library();
         }).show();
+    }
+    void applyReadingWindow(String s){
+        WindowManager.LayoutParams p=getWindow().getAttributes();
+        int light=prefs.getInt(key("brightness",s),-1);
+        p.screenBrightness=light<0?-1f:ReadingPolicy.brightness(light)/100f;getWindow().setAttributes(p);
+        if(prefs.getBoolean(key("keepAwake",s),true))getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        int rotation=prefs.getInt(key("rotation",s),0);
+        int wanted=rotation==1?ActivityInfo.SCREEN_ORIENTATION_PORTRAIT:rotation==2?ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE:rotation==3?ActivityInfo.SCREEN_ORIENTATION_LOCKED:ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
+        if(getRequestedOrientation()!=wanted)setRequestedOrientation(wanted);
+    }
+    void resetReadingWindow(){
+        WindowManager.LayoutParams p=getWindow().getAttributes();p.screenBrightness=-1f;getWindow().setAttributes(p);
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        if(getRequestedOrientation()!=ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED)setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+    }
+    JSONObject readingConfig(String s,String url){
+        JSONObject result=new JSONObject();try{
+            result.put("mode",mode(s));result.put("y",savedPosition(s,url));result.put("predecode",!covers.lowRam()&&prefs.getBoolean("predecode",true));
+            result.put("doubleTap",prefs.getBoolean(key("doubleTap",s),false));result.put("autoNext",prefs.getBoolean(key("autoNext",s),false));
+            result.put("speed",scrollSpeed(s));
+        }catch(Exception ignored){}return result;
     }
     void record(String s,String url){
         if(!has(s)||url==null||url.length()>4096||url.equals(lastRecordedUrl))return;
@@ -376,7 +436,7 @@ public class Reader extends Activity {
     void buildHistory(){
         heading(shelfContent,"Histórico","Volte às suas páginas recentes.");
         if(history.length()==0){fill(shelfContent,text("Nenhuma página visitada por enquanto.",15,MUTED));return;}
-        fill(shelfContent,button("Limpar histórico",false,()->new AlertDialog.Builder(this).setTitle("Limpar histórico?").setMessage("A última página e a posição de cada fonte também serão apagadas.").setNegativeButton("Cancelar",null).setPositiveButton("Limpar",(d,i)->{history=new JSONArray();SharedPreferences.Editor e=prefs.edit().remove("history");for(int j=0;j<sites.length();j++){String s=sites.optString(j);for(String k:new String[]{"last","position","positionUrl"})e.remove(key(k,s));}e.apply();library();}).show()));space(shelfContent,14);
+        fill(shelfContent,button("Limpar histórico",false,()->new AlertDialog.Builder(this).setTitle("Limpar histórico?").setMessage("A última página e a posição de cada fonte também serão apagadas.").setNegativeButton("Cancelar",null).setPositiveButton("Limpar",(d,i)->{history=new JSONArray();readingPositions.clear();SharedPreferences.Editor e=prefs.edit().remove("history").remove("chapterPositions");for(int j=0;j<sites.length();j++){String s=sites.optString(j);for(String k:new String[]{"last","position","positionUrl"})e.remove(key(k,s));}e.apply();library();}).show()));space(shelfContent,14);
         for(int i=0;i<history.length();i++){JSONObject h=history.optJSONObject(i);if(h==null)continue;String s=h.optString("source"),u=h.optString("url");if(!has(s)||checked(u)==null)continue;
             LinearLayout item=col();pad(item,15,14);item.setBackground(border(PANEL,14,LINE));fill(item,bold(name(s)+"  ›",16,WHITE));space(item,6);
             TextView address=text(u,12,MUTED);address.setMaxLines(2);address.setEllipsize(TextUtils.TruncateAt.END);fill(item,address);space(item,6);
@@ -401,8 +461,8 @@ public class Reader extends Activity {
         space(perf,6);fill(perf,text(covers.lowRam()?"Modo leve automático: preparação extra desativada neste aparelho.":"Prepara somente uma imagem próxima, já baixada, quando o leitor está ocioso. Não reduz a qualidade.",13,MUTED));
         space(perf,8);fill(perf,text("Cache de capas: até "+(covers.limitBytes()/1048576)+" MiB. Imagens de capítulos continuam sob controle do Gecko.",12,MUTED));fill(shelfContent,perf);space(shelfContent,16);
         LinearLayout reading=col();pad(reading,16,16);reading.setBackground(border(PANEL,16,LINE));fill(reading,bold("Como usar",18,WHITE));space(reading,9);
-        fill(reading,text("• Voltar mostra os controles durante a tela cheia.\n• Ajuste o modo e a capa em cada fonte.\n• O Koma salva a página e tenta recuperar a posição em leitores compatíveis.",14,MUTED));fill(shelfContent,reading);space(shelfContent,22);
-        fill(shelfContent,text("KOMA 3.1  ·  GeckoView 150  ·  ARM64",12,MUTED));
+        fill(reading,text("• Voltar mostra os controles durante a tela cheia.\n• Use os controles inferiores para rolagem automática e capítulos reconhecidos.\n• Ajuste brilho, rotação e gestos nas preferências da fonte.\n• O Koma guarda as últimas posições por página.",14,MUTED));fill(shelfContent,reading);space(shelfContent,22);
+        fill(shelfContent,text("KOMA 4.0  ·  GeckoView 150  ·  ARM64",12,MUTED));
     }
     void toast(String s){Toast.makeText(this,s,Toast.LENGTH_SHORT).show();}
     void openDashboard(){
@@ -420,7 +480,9 @@ public class Reader extends Activity {
     }
     void startReader(String s,String url,boolean isDashboard){
         flushPosition();positionSource=null;positionUrl=null;lastRecordedUrl=null;pageStartedAt=0;
+        clearReaderPort();resetChapterControls();
         source=s;dashboard=isDashboard;pageUrl=url;canBack=false;full=!isDashboard&&prefs.getBoolean(key("fullscreen",s),true);root(true);
+        if(!isDashboard)applyReadingWindow(s);
         bar=col();bar.setBackgroundColor(PANEL);LinearLayout top=row();pad(top,10,8);
         TextView exit=button("‹",false,this::closeReader);exit.setContentDescription("Voltar à estante");top.addView(exit,new LinearLayout.LayoutParams(dp(46),dp(46)));
         LinearLayout words=col();words.setPadding(dp(12),0,dp(8),0);readerTitle=bold(isDashboard?"uBlock Origin":name(s),16,WHITE);readerTitle.setSingleLine();readerTitle.setEllipsize(TextUtils.TruncateAt.END);fill(words,readerTitle);space(words,4);
@@ -428,8 +490,20 @@ public class Reader extends Activity {
         TextView menu=button("⋯",false,this::readerMenu);menu.setContentDescription("Menu de leitura");top.addView(menu,new LinearLayout.LayoutParams(dp(46),dp(46)));fill(bar,top);
         if(!isDashboard){LinearLayout controls=row();pad(controls,10,5);String[] names={"Voltar","Recarregar","Tela cheia"};Runnable[] actions={()->{if(session!=null&&canBack)session.goBack();},()->{if(session!=null)session.reload();},()->setFull(true)};
             for(int i=0;i<3;i++){LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,dp(42),1);if(i>0)p.leftMargin=dp(6);controls.addView(button(names[i],i==2,actions[i]),p);}fill(bar,controls);}
-        progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);progress.setMax(100);progress.setProgressTintList(ColorStateList.valueOf(MINT));bar.addView(progress,new LinearLayout.LayoutParams(-1,dp(2)));fill(root,bar);
-        browser=new GeckoView(this);browser.setBackgroundColor(Color.BLACK);root.addView(browser,new LinearLayout.LayoutParams(-1,0,1));
+        progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);progress.setMax(100);progress.setProgressTintList(ColorStateList.valueOf(MINT));bar.addView(progress,new LinearLayout.LayoutParams(-1,dp(2)));
+        browser=new GeckoView(this);browser.setBackgroundColor(Color.BLACK);
+        if(isDashboard){fill(root,bar);root.addView(browser,new LinearLayout.LayoutParams(-1,0,1));}
+        else{
+            FrameLayout frame=new FrameLayout(this);root.addView(frame,new LinearLayout.LayoutParams(-1,0,1));
+            frame.addView(browser,new FrameLayout.LayoutParams(-1,-1));
+            frame.addView(bar,new FrameLayout.LayoutParams(-1,-2,Gravity.TOP));
+            readingTools=col();pad(readingTools,10,9);readingTools.setBackgroundColor(PANEL);
+            LinearLayout info=row();readingPercent=text("Progresso da página: —",12,MUTED);weighted(info,readingPercent,-2);
+            info.addView(button("Ajustes",false,()->siteSettings(source)));fill(readingTools,info);space(readingTools,6);
+            LinearLayout controls=row();previousButton=button("‹ Anterior",false,()->navigateChapter(previousChapter));autoButton=button("▶ Auto",true,this::toggleAuto);nextButton=button("Próximo ›",false,()->navigateChapter(nextChapter));
+            for(TextView b:new TextView[]{previousButton,autoButton,nextButton}){LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,dp(48),1);if(b!=previousButton)p.leftMargin=dp(6);controls.addView(b,p);}
+            fill(readingTools,controls);frame.addView(readingTools,new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM));
+        }
         GeckoSessionSettings settings=new GeckoSessionSettings.Builder().contextId(isDashboard?"koma-ublock-panel":contextFor(s)).build();
         session=new GeckoSession(settings);
         session.setPermissionDelegate(new GeckoSession.PermissionDelegate(){
@@ -444,7 +518,7 @@ public class Reader extends Activity {
             @Override public void onCanGoBack(GeckoSession gs,boolean b){if(gs==session)canBack=b;}
             @Override public void onLocationChange(GeckoSession gs,String loc,List<GeckoSession.PermissionDelegate.ContentPermission> permissions,Boolean gesture){
                 if(gs!=session||loc==null)return;
-                if(!loc.equals(pageUrl)){flushPosition();positionSource=null;positionUrl=null;}
+                if(!loc.equals(pageUrl)){flushPosition();positionSource=null;positionUrl=null;clearReaderPort();resetChapterControls();updateChapterControls();}
                 pageUrl=loc;if(!dashboard){String domain=host(loc);if(!TextUtils.equals(readerHost.getText(),domain))readerHost.setText(domain);if(sameSite(loc)){record(source,loc);}}}
             @Override public GeckoResult<AllowOrDeny> onLoadRequest(GeckoSession gs,LoadRequest r){
                 if(gs!=session||r.uri==null)return GeckoResult.deny();
@@ -460,7 +534,7 @@ public class Reader extends Activity {
                 return GeckoResult.allow();}
         });
         session.setProgressDelegate(new GeckoSession.ProgressDelegate(){
-            @Override public void onPageStart(GeckoSession gs,String url){if(gs==session){pageStartedAt=SystemClock.elapsedRealtime();if(!full){progress.setProgress(0);progress.setVisibility(View.VISIBLE);}}}
+            @Override public void onPageStart(GeckoSession gs,String url){if(gs==session){pauseAuto();pageStartedAt=SystemClock.elapsedRealtime();if(!full){progress.setProgress(0);progress.setVisibility(View.VISIBLE);}}}
             @Override public void onProgressChange(GeckoSession gs,int value){if(gs==session&&!full){
                 if(value==100||value-progress.getProgress()>=5||value<progress.getProgress())progress.setProgress(value);
                 int visibility=value<100?View.VISIBLE:View.INVISIBLE;if(progress.getVisibility()!=visibility)progress.setVisibility(visibility);}}
@@ -473,48 +547,108 @@ public class Reader extends Activity {
                 if(!"koma".equals(app)||sender.session!=session||!sender.isTopLevel()||dashboard||source==null||!(message instanceof JSONObject))return null;
                 JSONObject m=(JSONObject)message;String u=m.optString("url");
                 if(!sameSite(u)||!u.equals(sender.url)||!u.equals(pageUrl)||u.length()>4096)return null;
-                if("init".equals(m.optString("type"))){JSONObject result=new JSONObject();try{
-                    result.put("mode",mode(source));result.put("y",savedPosition(source,u));
-                    result.put("predecode",!covers.lowRam()&&prefs.getBoolean("predecode",true));}catch(Exception ignored){}return GeckoResult.fromValue((Object)result);}
+                if("init".equals(m.optString("type")))return GeckoResult.fromValue((Object)readingConfig(source,u));
+                if("toggleControls".equals(m.optString("type"))&&prefs.getBoolean(key("doubleTap",source),false)&&chapterDetected){
+                    ui.post(()->{if(sender.session==session&&u.equals(pageUrl)&&!dashboard){pauseAuto();setFull(!full);}});return null;
+                }
                 if("position".equals(m.optString("type"))&&u.equals(pageUrl)){int y=PerfPolicy.clampPosition(m.optInt("y",0));queuePosition(source,u,y,m.optBoolean("flush",false));}
                 return null;}
+            @Override public void onConnect(WebExtension.Port port){
+                if(!validPort(port)){port.setDelegate(new WebExtension.PortDelegate(){});port.disconnect();return;}
+                clearReaderPort();readerPort=port;
+                port.setDelegate(new WebExtension.PortDelegate(){
+                    @Override public void onPortMessage(Object message,WebExtension.Port p){handleReaderPort(message,p);}
+                    @Override public void onDisconnect(WebExtension.Port p){if(readerPort==p){readerPort=null;resetChapterControls();updateChapterControls();}}
+                });
+                sendReaderCommand("status",null);
+            }
         },"koma");
         session.open(engine);browser.setSession(session);setFull(full);session.loadUri(url);
         if(!isDashboard&&!prefs.getBoolean("hint2",false)){toast("Use Voltar para mostrar os controles.");prefs.edit().putBoolean("hint2",true).apply();}
     }
     boolean sameSite(String u){return SecurityPolicy.sameSite(source,u);}
+    boolean validPort(WebExtension.Port p){
+        return p!=null&&"koma".equals(p.name)&&p.sender.session==session&&p.sender.isTopLevel()&&!dashboard&&source!=null
+            &&Objects.equals(pageUrl,p.sender.url)&&sameSite(p.sender.url);
+    }
+    void clearReaderPort(){
+        WebExtension.Port old=readerPort;readerPort=null;autoRunning=false;
+        if(old!=null){try{old.disconnect();}catch(RuntimeException ignored){}}
+    }
+    void resetChapterControls(){autoRunning=false;chapterDetected=false;nextChapter=null;previousChapter=null;readingProgress=0;}
+    void updateChapterControls(){
+        if(readingTools==null||dashboard||session==null)return;
+        if(previousButton!=null){previousButton.setEnabled(previousChapter!=null);previousButton.setAlpha(previousChapter==null?.45f:1f);}
+        if(nextButton!=null){nextButton.setEnabled(nextChapter!=null);nextButton.setAlpha(nextChapter==null?.45f:1f);}
+        if(autoButton!=null){boolean enabled=readerPort!=null&&chapterDetected;autoButton.setEnabled(enabled);autoButton.setAlpha(enabled?1f:.45f);autoButton.setText(autoRunning?"Ⅱ Pausar":"▶ Auto");}
+        if(readingPercent!=null){String label=chapterDetected?"Página: "+readingProgress+"%":"Capítulo não reconhecido";if(!TextUtils.equals(readingPercent.getText(),label))readingPercent.setText(label);}
+    }
+    void sendReaderCommand(String type,JSONObject data){
+        WebExtension.Port p=readerPort;if(!validPort(p))return;
+        try{JSONObject m=data==null?new JSONObject():data;m.put("type",type);m.put("url",pageUrl);p.postMessage(m);}catch(Exception e){clearReaderPort();resetChapterControls();updateChapterControls();}
+    }
+    void handleReaderPort(Object value,WebExtension.Port p){
+        if(readerPort!=p||!validPort(p)||!(value instanceof JSONObject))return;
+        JSONObject m=(JSONObject)value;if(!Objects.equals(pageUrl,m.optString("url")))return;
+        String type=m.optString("type");
+        if("status".equals(type)){
+            chapterDetected=m.optBoolean("chapter",false);readingProgress=ReadingPolicy.percent(m.optInt("percent",0));
+            nextChapter=chapterDetected?ReadingPolicy.chapterLink(source,pageUrl,m.optString("next")):null;
+            previousChapter=chapterDetected?ReadingPolicy.chapterLink(source,pageUrl,m.optString("previous")):null;
+            autoRunning=chapterDetected&&m.optBoolean("running",false);updateChapterControls();
+        }else if("autoEnd".equals(type)&&chapterDetected&&autoRunning&&foreground&&prefs.getBoolean(key("autoNext",source),false)){
+            String destination=ReadingPolicy.chapterLink(source,pageUrl,m.optString("next"));
+            if(destination!=null&&destination.equals(nextChapter))navigateChapter(destination);
+        }
+    }
+    void navigateChapter(String target){
+        if(session==null||dashboard)return;String u=ReadingPolicy.chapterLink(source,pageUrl,target);
+        if(u==null)return;pauseAuto();flushPosition();session.loadUri(u);
+    }
+    void toggleAuto(){
+        if(!chapterDetected||readerPort==null){toast("Leitor de capítulo não reconhecido neste site.");return;}
+        if(autoRunning){pauseAuto();return;}
+        JSONObject data=new JSONObject();try{data.put("speed",scrollSpeed(source));}catch(Exception ignored){}
+        sendReaderCommand("start",data);setFull(true);
+    }
+    void pauseAuto(){
+        if(readerPort!=null)sendReaderCommand("stop",null);autoRunning=false;updateChapterControls();
+    }
     void readerMenu(){
-        if(dashboard){new AlertDialog.Builder(this).setTitle("uBlock Origin").setItems(new String[]{"Recarregar painel","Voltar aos ajustes"},(d,i)->{if(i==0)session.reload();else closeReader();}).show();return;}
+        pauseAuto();if(dashboard){new AlertDialog.Builder(this).setTitle("uBlock Origin").setItems(new String[]{"Recarregar painel","Voltar aos ajustes"},(d,i)->{if(i==0)session.reload();else closeReader();}).show();return;}
         new AlertDialog.Builder(this).setTitle(name(source)).setItems(new String[]{"Página inicial","Configurar leitura","Copiar endereço","Painel do uBlock","Limpar cookies e sessão","Voltar à estante"},(d,i)->{
             switch(i){case 0:session.loadUri(source);break;case 1:siteSettings(source);break;case 2:((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("Página",pageUrl));toast("Endereço copiado.");break;case 3:openDashboard();break;case 4:resetSiteSession(source);break;case 5:closeReader();break;}}).show();
     }
     int savedPosition(String s,String url){
         if(Objects.equals(s,positionSource)&&Objects.equals(url,positionUrl))return positionY;
-        return url.equals(prefs.getString(key("positionUrl",s),""))?prefs.getInt(key("position",s),0):0;
+        return savedPositionFromDisk(s,url);
     }
     void queuePosition(String s,String url,int y,boolean urgent){
         if(!Objects.equals(s,positionSource)||!Objects.equals(url,positionUrl)){
             flushPosition();positionSource=s;positionUrl=url;positionY=savedPositionFromDisk(s,url);
         }
-        if(y!=positionY||!url.equals(prefs.getString(key("positionUrl",s),""))){positionY=y;positionDirty=true;}
+        if(y!=positionY||!readingPositions.contains(s,url)){positionY=y;positionDirty=true;}
         if(urgent||!foreground){flushPosition();return;}
         if(positionDirty&&!positionScheduled){positionScheduled=true;ui.postDelayed(positionFlush,4000);}
     }
-    int savedPositionFromDisk(String s,String url){return url.equals(prefs.getString(key("positionUrl",s),""))?prefs.getInt(key("position",s),0):0;}
+    int savedPositionFromDisk(String s,String url){return readingPositions.get(s,url,url.equals(prefs.getString(key("positionUrl",s),""))?prefs.getInt(key("position",s),0):0);}
     void flushPosition(){
         ui.removeCallbacks(positionFlush);positionScheduled=false;
         if(positionDirty&&positionSource!=null&&positionUrl!=null){
-            prefs.edit().putString(key("positionUrl",positionSource),positionUrl).putInt(key("position",positionSource),positionY).apply();
+            readingPositions.put(positionSource,positionUrl,positionY);
+            prefs.edit().putString(key("positionUrl",positionSource),positionUrl).putInt(key("position",positionSource),positionY).putString("chapterPositions",readingPositions.serialize()).apply();
             positionDirty=false;
         }
     }
     void immersive(){getWindow().getDecorView().setSystemUiVisibility(full?View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN|View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_LAYOUT_STABLE:0);}
-    void setFull(boolean v){full=v;bar.setVisibility(v?View.GONE:View.VISIBLE);root.setFitsSystemWindows(!v);root.requestApplyInsets();immersive();}
-    void release(){flushPosition();positionSource=null;positionUrl=null;if(session!=null){GeckoSession old=session;session=null;browser.releaseSession();old.close();browser=null;}}
+    void setFull(boolean v){full=v;bar.setVisibility(v?View.GONE:View.VISIBLE);
+        if(readingTools!=null&&!dashboard){readingTools.setVisibility(v?View.GONE:View.VISIBLE);updateChapterControls();if(!v)sendReaderCommand("status",null);}
+        root.setFitsSystemWindows(!v);root.requestApplyInsets();immersive();}
+    void release(){pauseAuto();flushPosition();positionSource=null;positionUrl=null;clearReaderPort();if(session!=null){GeckoSession old=session;session=null;browser.releaseSession();old.close();browser=null;}readingTools=null;autoButton=null;previousButton=null;nextButton=null;readingPercent=null;resetReadingWindow();}
     void closeReader(){release();source=null;pageUrl=null;library();}
-    @Override public void onBackPressed(){if(session==null){if(tab!=0){tab=0;library();}else super.onBackPressed();}else if(full)setFull(false);else if(canBack)session.goBack();else closeReader();}
+    @Override public void onBackPressed(){if(session==null){if(tab!=0){tab=0;library();}else super.onBackPressed();}else if(full){pauseAuto();setFull(false);}else if(canBack){pauseAuto();session.goBack();}else closeReader();}
     @Override public void onWindowFocusChanged(boolean focus){super.onWindowFocusChanged(focus);if(focus&&full)immersive();}
-    @Override protected void onPause(){foreground=false;flushPosition();if(session!=null)session.setActive(false);super.onPause();}
+    @Override protected void onPause(){foreground=false;pauseAuto();flushPosition();if(session!=null)session.setActive(false);super.onPause();}
     @Override protected void onResume(){super.onResume();foreground=true;if(session!=null)session.setActive(true);}
     @Override public void onTrimMemory(int level){super.onTrimMemory(level);if(covers!=null)covers.trim(level);}
     @Override public void onLowMemory(){super.onLowMemory();if(covers!=null)covers.clear();}

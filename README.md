@@ -26,3 +26,7 @@ O leitor usa uma sessão Gecko por vez. A estante libera a sessão. O app manté
 ## Componentes
 Mozilla GeckoView (MPL-2.0) e uBlock Origin (GPL-3.0). O script tools/blocker.py baixa a versão indicada do catálogo da Mozilla, confere o resumo SHA-256 e a identidade da extensão e inclui seu conteúdo no APK. A extensão é inicializada antes da primeira página. Para atualizar o código do bloqueador, altere a versão e gere outro APK.
 Fontes: https://github.com/gorhill/uBlock e https://firefox-source-docs.mozilla.org/mobile/android/geckoview/
+
+
+## Koma 4.0
+Veja [READING.md](READING.md) para os novos controles de leitura e limitações.

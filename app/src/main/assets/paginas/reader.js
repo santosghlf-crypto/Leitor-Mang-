@@ -49,7 +49,26 @@
     }
     return chosen;
   }
-  if(typeof module!=="undefined"&&module.exports)module.exports={createPositionTracker,selectCandidate,SAVE_INTERVAL,MAX_PIXELS};
+  const clampSpeed=value=>Math.max(30,Math.min(300,Number.isFinite(Number(value))?Number(value):100));
+  function chapterUrl(raw,current){
+    if(!raw)return null;
+    try{
+      const a=new URL(current),b=new URL(raw,current),host=u=>u.hostname.toLowerCase().replace(/^www\./,"");
+      if(a.protocol!=="https:"||b.protocol!=="https:"||b.username||b.password||b.port||host(a)!==host(b))return null;
+      if(a.pathname===b.pathname&&a.search===b.search)return null;
+      return b.href;
+    }catch(e){return null;}
+  }
+  function progressPercent(y,max){return max>0?Math.max(0,Math.min(100,Math.round(y/max*100))):0;}
+  function createTapTracker(){
+    let last=null;
+    return {
+      reset(){last=null;},
+      tap(x,y,t){const match=last&&t-last.t>0&&t-last.t<=320&&Math.hypot(x-last.x,y-last.y)<=32;
+        last=match?null:{x,y,t};return !!match;}
+    };
+  }
+  if(typeof module!=="undefined"&&module.exports)module.exports={createPositionTracker,selectCandidate,SAVE_INTERVAL,MAX_PIXELS,clampSpeed,chapterUrl,progressPercent,createTapTracker};
   if(typeof window==="undefined"||window!==window.top)return;
 
   const send=(message)=>browser.runtime.sendNativeMessage("koma",message);
@@ -62,6 +81,110 @@
   let observer=null,mutations=null,discovery=null,discoveryTimer=null,scanList=[],scanIndex=0,needsScan=false,needsPrune=false;
   const observed=new Set(),near=new Set(),prepared=new WeakMap(),pendingNodes=new Set();
   let warmEnabled=false;
+  let configNow=null,port=null,statusTimer=null,auto=false,raf=null,autoWait=null,lastFrame=0,carry=0,stalledAt=null,stalledY=-1;
+  let lastStatus="",pointer=null;const taps=createTapTracker();
+  function hasChapter(){
+    // Only recognized reader containers that actually contain images; no guesses on catalogs.
+    return !!document.querySelector(SELECTOR);
+  }
+  function chapterLink(direction){
+    if(!hasChapter())return null;
+    const next=direction==="next";
+    const selectors=next?['a[rel~="next"]','a.next-chapter','a.chapter-next','.nav-next a','.next_page']:['a[rel~="prev"]','a.prev-chapter','a.chapter-prev','.nav-previous a','.prev_page'];
+    for(const selector of selectors){
+      const link=document.querySelector(selector);
+      if(!link||!link.href)continue;
+      const explicit=selector.includes("rel~")||selector.includes("chapter");
+      const label=[link.textContent,link.getAttribute("title"),link.getAttribute("aria-label")].join(" ").toLowerCase();
+      if(!explicit&&!/(cap[ií]tulo|chapter|chap\b|epis[oó]dio|episode)/i.test(label))continue;
+      const valid=chapterUrl(link.href,location.href);if(valid)return valid;
+    }
+    return null;
+  }
+  function maxScroll(){const d=document.scrollingElement||document.documentElement;return Math.max(0,d.scrollHeight-window.innerHeight);}
+  function post(type,extra={}){
+    if(!port)return;try{port.postMessage({type,url:location.href,...extra});}catch(e){}
+  }
+  function publish(force=false){
+    if(finished||!port||document.hidden)return;
+    const chapter=hasChapter(),state={chapter,percent:progressPercent(window.scrollY,maxScroll()),running:auto,next:chapter?chapterLink("next"):null,previous:chapter?chapterLink("previous"):null};
+    const signature=JSON.stringify(state);if(!force&&signature===lastStatus)return;
+    lastStatus=signature;post("status",state);
+  }
+  function scheduleStatus(){
+    if(!port||finished||document.hidden||statusTimer!==null)return;
+    statusTimer=setTimeout(()=>{statusTimer=null;publish();},750);
+  }
+  function stopAuto(report=true){
+    auto=false;if(raf!==null)cancelAnimationFrame(raf);if(autoWait!==null)clearTimeout(autoWait);
+    raf=null;autoWait=null;lastFrame=0;carry=0;stalledAt=null;stalledY=-1;
+    if(report){tracker.flush();publish(true);}
+  }
+  function autoFrame(now){
+    raf=null;if(!auto||finished||document.hidden){stopAuto();return;}
+    if(!lastFrame)lastFrame=now;
+    const elapsed=Math.min(50,Math.max(0,now-lastFrame));lastFrame=now;
+    carry+=clampSpeed(configNow.speed)*elapsed/1000;
+    const pixels=Math.floor(carry);
+    if(pixels>0){carry-=pixels;window.scrollBy({top:pixels,left:0,behavior:"instant"});}
+    const y=window.scrollY;
+    // Back off at the end or if the website refuses document scrolling.
+    if(y===stalledY){if(stalledAt===null)stalledAt=now;}
+    else{stalledY=y;stalledAt=null;}
+    if(stalledAt!==null&&now-stalledAt>=500){
+      const atEnd=y>=maxScroll()-3;
+      autoWait=setTimeout(()=>{
+        autoWait=null;if(!auto||finished||document.hidden){stopAuto();return;}
+        if(window.scrollY<maxScroll()-3&&atEnd){lastFrame=0;stalledAt=null;raf=requestAnimationFrame(autoFrame);return;}
+        if(atEnd&&window.scrollY>=maxScroll()-3&&configNow.autoNext===true){
+          publish(true);const next=chapterLink("next");if(next)post("autoEnd",{next});
+        }
+        stopAuto();
+      },2500);return;
+    }
+    raf=requestAnimationFrame(autoFrame);
+  }
+  function startAuto(speed){
+    if(!configNow||!hasChapter()||document.hidden||finished)return;
+    stopAuto(false);if(restoring)stopRestore();tracker.activate();
+    configNow.speed=clampSpeed(speed);auto=true;publish(true);raf=requestAnimationFrame(autoFrame);
+  }
+  function connectReader(){
+    if(port||!configNow||finished)return;
+    try{
+      const connection=browser.runtime.connectNative("koma");port=connection;lastStatus="";
+      connection.onDisconnect.addListener(()=>{if(port===connection){port=null;stopAuto(false);}});
+      connection.onMessage.addListener(m=>{
+        if(port!==connection||!m||m.url!==location.href||finished)return;
+        if(m.type==="start")startAuto(m.speed);
+        else if(m.type==="stop")stopAuto();
+        else if(m.type==="status")publish(true);
+        else if(m.type==="settings"){
+          stopAuto();configNow.doubleTap=m.doubleTap===true;configNow.autoNext=m.autoNext===true;configNow.speed=clampSpeed(m.speed);
+          document.documentElement.classList.toggle("koma-doubletap",configNow.doubleTap);taps.reset();publish(true);
+        }
+      });
+      publish(true);
+    }catch(e){port=null;}
+  }
+  function disconnectReader(){
+    if(statusTimer!==null)clearTimeout(statusTimer);statusTimer=null;stopAuto(false);
+    const p=port;port=null;if(p)try{p.disconnect();}catch(e){}
+  }
+  function interactive(target){return !(target instanceof Element)||!!target.closest("a,button,input,textarea,select,label,[contenteditable],[role=button]");}
+  document.addEventListener("pointerdown",event=>{
+    if(!event.isTrusted)return;if(auto)stopAuto();
+    if(!configNow?.doubleTap||!event.isPrimary||!["touch","pen"].includes(event.pointerType)||interactive(event.target)||!event.target.matches(SELECTOR)){pointer=null;taps.reset();return;}
+    pointer={id:event.pointerId,x:event.clientX,y:event.clientY,t:performance.now(),target:event.target};
+  },{passive:true,capture:true});
+  document.addEventListener("pointerup",event=>{
+    const p=pointer;pointer=null;
+    if(!p||!event.isTrusted||event.pointerId!==p.id||event.target!==p.target||performance.now()-p.t>250||Math.hypot(event.clientX-p.x,event.clientY-p.y)>12){taps.reset();return;}
+    if(taps.tap(event.clientX,event.clientY,performance.now()))send({type:"toggleControls",url:location.href}).catch(()=>{});
+  },{passive:true,capture:true});
+  document.addEventListener("pointercancel",()=>{pointer=null;taps.reset();},{passive:true});
+  for(const event of ["wheel","keydown"])addEventListener(event,e=>{if(e.isTrusted&&auto)stopAuto();},{passive:true});
+
 
   function stopRestore(){
     if(restoreTimer!==null)clearTimeout(restoreTimer);
@@ -137,7 +260,7 @@
         // Process only added subtrees, not the entire document on every scroll.
         scanList=Array.from(node.querySelectorAll(SELECTOR));scanIndex=0;
       }
-      if(scanIndex<scanList.length||pendingNodes.size||needsScan)scheduleScan();
+      if(scanIndex<scanList.length||pendingNodes.size||needsScan)scheduleScan();else scheduleStatus();
     };
     if(typeof window.requestIdleCallback==="function")idleScan=idle(run);
     else idleScan=setTimeout(()=>run({timeRemaining:()=>5}),50);
@@ -199,16 +322,16 @@
     },true);
   }
   addEventListener("scroll",()=>{
-    lastScroll=performance.now();tracker.scroll();
+    lastScroll=performance.now();tracker.scroll();scheduleStatus();
     // One scheduled check; don't reset a timer or scan images for every scroll event.
     scheduleWarm();
   },{passive:true});
   document.addEventListener("visibilitychange",()=>{
-    if(document.hidden){tracker.flush();cancelWarm();}
-    else{scheduleWarm();if(needsScan||pendingNodes.size||scanIndex<scanList.length)scheduleScan();}
+    if(document.hidden){stopAuto();tracker.flush();cancelWarm();}
+    else{publish(true);scheduleWarm();if(needsScan||pendingNodes.size||scanIndex<scanList.length)scheduleScan();}
   });
   addEventListener("pagehide",event=>{
-    tracker.flush();cancelWarm();
+    tracker.flush();cancelWarm();disconnectReader();
     if(event.persisted)return; // BFCache page: resume normally when shown again.
     finished=true;tracker.stop();
     if(restoreTimer!==null)clearTimeout(restoreTimer);
@@ -216,10 +339,11 @@
     stopDiscovery();if(mutations)mutations.disconnect();if(observer)observer.disconnect();
     near.clear();observed.clear();pendingNodes.clear();scanList=[];
   });
-  addEventListener("pageshow",()=>{if(!finished){scheduleWarm();if(needsScan||pendingNodes.size||scanIndex<scanList.length)scheduleScan();}});
+  addEventListener("pageshow",()=>{if(!finished){connectReader();scheduleWarm();if(needsScan||pendingNodes.size||scanIndex<scanList.length)scheduleScan();}});
   send({type:"init",url:location.href}).then(config=>{
     if(finished)return;
     if(!config){tracker.activate();return;}
+    configNow=config;document.documentElement.classList.toggle("koma-doubletap",config.doubleTap===true);connectReader();
     const mode=config.mode;
     if(mode==="fit"||mode==="continuous"){
       document.documentElement.classList.add("koma-"+mode);startImages(config.predecode===true);
